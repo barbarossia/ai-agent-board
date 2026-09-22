@@ -117,10 +117,9 @@ export interface TaskLifecycleTransition {
   requiresCompletionConfirmation?: boolean;
 }
 
-/** Optional evidence supplied by a later execution flow; it is not a Session contract. */
+/** Explicit caller confirmation required for Task lifecycle completion. */
 export interface TaskLifecycleTransitionContext {
   completionConfirmed?: boolean;
-  roleExecutionSnapshot?: RoleExecutionSnapshot | null;
 }
 
 export interface TaskLifecycleError {

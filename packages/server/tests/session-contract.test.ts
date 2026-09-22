@@ -73,6 +73,30 @@ test('creates an independent Ready Session only for an Active Task', () => {
   rejects(validateCreateSession('Active', { id: 'session-2', taskId: 'task-1', createdAt: 101, sdkSessionId: ' ' }), 'blank', 'sdkSessionId');
 });
 
+test('captures a validated immutable Role execution snapshot', () => {
+  const mutableSnapshot = {
+    roleId: 'role-builder',
+    name: 'Builder',
+    responsibility: 'Implement the requested change.',
+    instructions: 'Use focused tests.',
+    execution: { provider: 'codex' as const, model: 'custom/model' },
+  };
+  const created = value(createSession('Active', {
+    id: 'session-snapshot', taskId: 'task-1', createdAt: 100, roleExecutionSnapshot: mutableSnapshot,
+  }));
+  mutableSnapshot.name = 'Changed after session creation';
+  mutableSnapshot.execution.model = 'different/model';
+  assert.equal(created.roleExecutionSnapshot?.name, 'Builder');
+  assert.equal(created.roleExecutionSnapshot?.execution.model, 'custom/model');
+  assert.equal(Object.isFrozen(created.roleExecutionSnapshot), true);
+  assert.equal(Object.isFrozen(created.roleExecutionSnapshot?.execution), true);
+
+  rejects(createSession('Active', {
+    id: 'session-invalid-snapshot', taskId: 'task-1', createdAt: 101,
+    roleExecutionSnapshot: { ...roleSnapshot, execution: { provider: 'unsupported' } },
+  }), 'invalid_type', 'roleExecutionSnapshot.execution.provider');
+});
+
 test('state transitions support start, wait, resume and terminal success/failure while preserving timestamps', () => {
   const ready = session('session-1');
   const running = value(transitionSession(ready, 'Running', 110));

@@ -46,7 +46,7 @@ Errors include stable `invalid_state`, `invalid_transition`, or `terminal_state_
 
 `createSession` accepts only a Phase 2.3 Task state of `Active`; `Draft`, `Inbox`, and `Done` cannot admit a Session. `Draft → Inbox` and `Inbox → Active` remain Task decisions and do not dispatch a Session. Session `Completed` or `Failed` does not automatically move the Task to `Done`; Phase 2.3 still requires explicit completion confirmation. Session failure is recorded in the recent result and the Task may later use its defined retry/reopen path.
 
-The Role execution snapshot is captured on Session creation when supplied and remains associated with that Session. Role edits cannot rewrite an existing Session's selection. `ExecutionAttempt.sessionId` is optional for compatibility with existing attempts without business Session identity. `sdkSessionId` is independently nullable. No provider status mapping or runtime `sessions` map is changed here.
+When supplied, the Role execution snapshot is strictly validated, copied, and frozen on Session creation before it is associated with that Session. Role edits or later mutation of the caller's input cannot rewrite the stored selection. `ExecutionAttempt.sessionId` is optional for compatibility with existing attempts without business Session identity. `sdkSessionId` is independently nullable. No provider status mapping or runtime `sessions` map is changed here.
 
 ## Persistence and query contract for later phases
 

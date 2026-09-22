@@ -209,6 +209,62 @@ function isStringOrNull(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
 }
 
+/**
+ * A Session owns an immutable copy of its Role selection.  Do not keep a
+ * caller-owned RoleExecutionSnapshot here: later Role edits (or a mutable
+ * input object) must not rewrite execution history.
+ */
+function normalizeRoleExecutionSnapshot(
+  value: unknown,
+  error: (code: SessionContractError['code'], path: string, message: string) => void,
+): RoleExecutionSnapshot | null {
+  if (value === null || value === undefined) return null;
+  if (!isRoleObject(value)) {
+    error('invalid_type', 'roleExecutionSnapshot', 'Expected a Role execution snapshot or null.');
+    return null;
+  }
+
+  const known = ['roleId', 'name', 'responsibility', 'instructions', 'execution'];
+  for (const key of Object.keys(value)) {
+    if (!known.includes(key)) error('invalid_type', `roleExecutionSnapshot.${key}`, 'Unknown Role execution snapshot field.');
+  }
+  for (const key of ['roleId', 'name', 'responsibility', 'instructions']) {
+    if (!Object.hasOwn(value, key) || !isNonblankString(value[key])) {
+      error('invalid_type', `roleExecutionSnapshot.${key}`, 'Expected a nonblank string.');
+    }
+  }
+  if (!isRoleObject(value.execution)) {
+    error('invalid_type', 'roleExecutionSnapshot.execution', 'Expected a Role execution configuration.');
+    return null;
+  }
+  for (const key of Object.keys(value.execution)) {
+    if (key !== 'provider' && key !== 'model') error('invalid_type', `roleExecutionSnapshot.execution.${key}`, 'Unknown Role execution configuration field.');
+  }
+  if (!isValidAgentType(value.execution.provider)) {
+    error('invalid_type', 'roleExecutionSnapshot.execution.provider', 'Expected a supported provider identifier.');
+  }
+  if (value.execution.model !== null && !isNonblankString(value.execution.model)) {
+    error('invalid_type', 'roleExecutionSnapshot.execution.model', 'Expected a nonblank model string or null.');
+  }
+
+  if (
+    !isNonblankString(value.roleId)
+    || !isNonblankString(value.name)
+    || !isNonblankString(value.responsibility)
+    || !isNonblankString(value.instructions)
+    || !isValidAgentType(value.execution.provider)
+    || (value.execution.model !== null && !isNonblankString(value.execution.model))
+  ) return null;
+
+  return Object.freeze({
+    roleId: value.roleId,
+    name: value.name,
+    responsibility: value.responsibility,
+    instructions: value.instructions,
+    execution: Object.freeze({ provider: value.execution.provider, model: value.execution.model ?? null }),
+  });
+}
+
 /** Validate a new business Session before storage; IDs are caller-owned and globally unique. */
 export function validateCreateSession(
   taskState: unknown,
@@ -232,9 +288,7 @@ export function validateCreateSession(
   }
   if (!Object.hasOwn(input, 'createdAt')) error('required', 'createdAt', 'Creation timestamp is required.');
   else if (!isTimestamp(input.createdAt)) error('invalid_type', 'createdAt', 'Expected a nonnegative integer timestamp.');
-  if (Object.hasOwn(input, 'roleExecutionSnapshot') && input.roleExecutionSnapshot !== null && !isRoleObject(input.roleExecutionSnapshot)) {
-    error('invalid_type', 'roleExecutionSnapshot', 'Expected a Role execution snapshot or null.');
-  }
+  const roleExecutionSnapshot = normalizeRoleExecutionSnapshot(input.roleExecutionSnapshot, error);
   for (const key of ['executionAttemptId', 'sdkSessionId']) {
     if (Object.hasOwn(input, key) && !isStringOrNull(input[key])) {
       error('invalid_type', key, 'Expected a string or null.');
@@ -253,7 +307,7 @@ export function validateCreateSession(
       id: value.id,
       taskId: value.taskId,
       createdAt: value.createdAt,
-      roleExecutionSnapshot: value.roleExecutionSnapshot ?? null,
+      roleExecutionSnapshot,
       executionAttemptId: value.executionAttemptId ?? null,
       sdkSessionId: value.sdkSessionId ?? null,
     },
