@@ -54,15 +54,8 @@ test('key lifecycle paths have explicit actions and do not trigger execution', (
   assert.equal(getTaskLifecycleTransition('Inbox', 'Active').ok, true);
 });
 
-test('Active → Done requires explicit confirmation and ignores Role snapshot or legacy agent status', () => {
-  const roleExecutionSnapshot = {
-    roleId: 'role-1',
-    name: 'Builder',
-    responsibility: 'Build',
-    instructions: 'Build carefully',
-    execution: { provider: 'codex' as const, model: null },
-  };
-  const withoutConfirmation = transitionTaskLifecycle('Active', 'Done', { roleExecutionSnapshot });
+test('Active → Done requires explicit confirmation and cannot infer completion from incidental context', () => {
+  const withoutConfirmation = transitionTaskLifecycle('Active', 'Done', {});
   assert.equal(withoutConfirmation.ok, false);
   if (!withoutConfirmation.ok) {
     assert.equal(withoutConfirmation.error.code, 'completion_confirmation_required');

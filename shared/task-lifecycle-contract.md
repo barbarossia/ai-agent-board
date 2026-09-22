@@ -46,7 +46,7 @@ The pure helpers return a new result and never mutate a Task. Callers should rej
 
 ## Role/execution and compatibility boundary
 
-Phase 2.2 Role execution snapshots may be carried as optional context for provenance, but they do not authorize a transition and do not provide completion evidence. A Role edit therefore cannot rewrite lifecycle history or silently move a Task. The effective Provider/model and Session rules remain later-phase responsibilities.
+`transitionTaskLifecycle` accepts only explicit completion confirmation; it does not accept a Role snapshot, Agent status, Session result, Board column, or any other execution signal as lifecycle evidence. Role selection and execution provenance remain attached to their Session, so a Role edit cannot rewrite lifecycle history or silently move a Task. The effective Provider/model and Session rules remain later-phase responsibilities.
 
 The existing lowercase `ColumnId` values (`backlog`, `in-progress`, `review`, `done`), `AgentStatus` values and API behavior remain unchanged. No automatic two-way mapping is introduced: `backlog` cannot be guessed as `Draft` or `Inbox`, and `review` cannot be treated as `Done`. A later adapter must name its authoritative side, preserve unmappable legacy values, and define conflict handling before any consumer migration. This task adds no routes, persistence fields, UI, drag/drop behavior, Agent startup, or Session contract.
 
