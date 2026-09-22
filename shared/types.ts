@@ -3,6 +3,43 @@ export type ColumnId = 'backlog' | 'in-progress' | 'review' | 'done';
 export type AgentStatus = 'idle' | 'planning' | 'executing' | 'complete' | 'failed';
 export type AgentType = 'copilot' | 'claude' | 'codex' | 'opencode' | 'hermes' | 'openclaw' | 'grok';
 
+/** New domain lifecycle, serialized with exact title case per Phase 2.1. */
+export type TaskLifecycleState = 'Draft' | 'Inbox' | 'Active' | 'Done';
+
+export type TaskLifecycleAction =
+  | 'noop'
+  | 'submit'
+  | 'withdraw'
+  | 'qualify'
+  | 'retry'
+  | 'complete'
+  | 'reopen';
+
+export interface TaskLifecycleTransition {
+  from: TaskLifecycleState;
+  to: TaskLifecycleState;
+  action: TaskLifecycleAction;
+  /** Active → Done is never inferred from an AgentStatus or Session result. */
+  requiresCompletionConfirmation?: boolean;
+}
+
+/** Optional evidence supplied by a later execution flow; it is not a Session contract. */
+export interface TaskLifecycleTransitionContext {
+  completionConfirmed?: boolean;
+  roleExecutionSnapshot?: RoleExecutionSnapshot | null;
+}
+
+export interface TaskLifecycleError {
+  code: 'invalid_state' | 'invalid_transition' | 'completion_confirmation_required';
+  from: unknown;
+  to: unknown;
+  message: string;
+}
+
+export type TaskLifecycleResult =
+  | { ok: true; state: TaskLifecycleState; transition: TaskLifecycleTransition }
+  | { ok: false; error: TaskLifecycleError };
+
 /** Domain terminology; preserves every existing AgentType wire value. */
 export type ProviderType = AgentType;
 

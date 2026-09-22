@@ -1,12 +1,110 @@
 import type {
   ColumnId, Priority, AgentStatus, AgentType, CreateRoleInput, UpdateRoleInput,
   Role, RoleContractError, RoleContractResult, RoleExecutionSnapshot,
+  TaskLifecycleAction, TaskLifecycleResult, TaskLifecycleState,
+  TaskLifecycleTransition, TaskLifecycleTransitionContext,
 } from './types.js';
 
 export const VALID_PRIORITIES: readonly Priority[] = ['low', 'medium', 'high', 'critical'] as const;
 export const VALID_COLUMNS: readonly ColumnId[] = ['backlog', 'in-progress', 'review', 'done'] as const;
 export const VALID_AGENT_STATUSES: readonly AgentStatus[] = ['idle', 'planning', 'executing', 'complete', 'failed'] as const;
 export const VALID_AGENT_TYPES: readonly AgentType[] = ['copilot', 'claude', 'codex', 'opencode', 'hermes', 'openclaw', 'grok'] as const;
+
+export const VALID_TASK_LIFECYCLE_STATES: readonly TaskLifecycleState[] = ['Draft', 'Inbox', 'Active', 'Done'] as const;
+
+const lifecycleTransition = (
+  from: TaskLifecycleState,
+  to: TaskLifecycleState,
+  action: TaskLifecycleAction,
+  requiresCompletionConfirmation = false,
+): TaskLifecycleTransition => ({
+  from,
+  to,
+  action,
+  ...(requiresCompletionConfirmation ? { requiresCompletionConfirmation: true } : {}),
+});
+
+/** Complete 4 × 4 matrix. Null entries are intentionally explicit invalid transitions. */
+export const TASK_LIFECYCLE_TRANSITIONS: Readonly<Record<TaskLifecycleState, Readonly<Record<TaskLifecycleState, TaskLifecycleTransition | null>>>> = {
+  Draft: {
+    Draft: lifecycleTransition('Draft', 'Draft', 'noop'),
+    Inbox: lifecycleTransition('Draft', 'Inbox', 'submit'),
+    Active: null,
+    Done: null,
+  },
+  Inbox: {
+    Draft: lifecycleTransition('Inbox', 'Draft', 'withdraw'),
+    Inbox: lifecycleTransition('Inbox', 'Inbox', 'noop'),
+    Active: lifecycleTransition('Inbox', 'Active', 'qualify'),
+    Done: null,
+  },
+  Active: {
+    Draft: null,
+    Inbox: lifecycleTransition('Active', 'Inbox', 'retry'),
+    Active: lifecycleTransition('Active', 'Active', 'noop'),
+    Done: lifecycleTransition('Active', 'Done', 'complete', true),
+  },
+  Done: {
+    Draft: null,
+    Inbox: lifecycleTransition('Done', 'Inbox', 'reopen'),
+    Active: null,
+    Done: lifecycleTransition('Done', 'Done', 'noop'),
+  },
+};
+
+export function isValidTaskLifecycleState(value: unknown): value is TaskLifecycleState {
+  return typeof value === 'string'
+    && (VALID_TASK_LIFECYCLE_STATES as readonly string[]).includes(value);
+}
+
+export function getTaskLifecycleTransition(from: unknown, to: unknown): TaskLifecycleResult {
+  if (!isValidTaskLifecycleState(from) || !isValidTaskLifecycleState(to)) {
+    return {
+      ok: false,
+      error: {
+        code: 'invalid_state',
+        from,
+        to,
+        message: 'Task lifecycle state must be one of Draft, Inbox, Active, or Done.',
+      },
+    };
+  }
+  const transition = TASK_LIFECYCLE_TRANSITIONS[from][to];
+  if (!transition) {
+    return {
+      ok: false,
+      error: {
+        code: 'invalid_transition',
+        from,
+        to,
+        message: `Task lifecycle cannot transition from ${from} to ${to}.`,
+      },
+    };
+  }
+  return { ok: true, state: to, transition };
+}
+
+/** Pure state transition; callers must provide explicit completion evidence for Active → Done. */
+export function transitionTaskLifecycle(
+  from: unknown,
+  to: unknown,
+  context: TaskLifecycleTransitionContext = {},
+): TaskLifecycleResult {
+  const result = getTaskLifecycleTransition(from, to);
+  if (!result.ok) return result;
+  if (result.transition.requiresCompletionConfirmation && context.completionConfirmed !== true) {
+    return {
+      ok: false,
+      error: {
+        code: 'completion_confirmation_required',
+        from,
+        to,
+        message: 'Active → Done requires explicit completion confirmation.',
+      },
+    };
+  }
+  return result;
+}
 
 /** Allowed column transitions. Key = current column, value = columns you can move to. */
 export const VALID_TRANSITIONS: Record<ColumnId, readonly ColumnId[]> = {
