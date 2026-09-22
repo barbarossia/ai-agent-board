@@ -2,6 +2,8 @@ export type Priority = 'low' | 'medium' | 'high' | 'critical';
 export type ColumnId = 'backlog' | 'in-progress' | 'review' | 'done';
 export type AgentStatus = 'idle' | 'planning' | 'executing' | 'complete' | 'failed';
 export type AgentType = 'copilot' | 'claude' | 'codex' | 'opencode' | 'hermes' | 'openclaw' | 'grok';
+export type ThinkingEffort = 'low' | 'medium' | 'high';
+export type RoleId = 'orchestrator' | 'research' | 'implementor' | 'reviewer' | 'knowledge';
 
 export type SessionState = 'Ready' | 'Running' | 'Waiting' | 'Completed' | 'Failed';
 export type SessionStateAction = 'noop' | 'start' | 'wait' | 'resume' | 'complete' | 'fail';
@@ -333,6 +335,67 @@ export interface UpdateProjectRequest {
 export interface ProjectConfig {
   /** Absolute path under which repos cloned from a URL are placed. */
   cloneRoot: string;
+}
+
+/** Settings for one installed execution capability. CLI details are configuration, not a role definition. */
+export interface ProviderConfig {
+  id: AgentType;
+  displayName: string;
+  enabled: boolean;
+  cliCommand: string;
+  commandArgs: string[];
+  models: string[];
+  defaultModel?: string;
+  capabilities: string[];
+}
+
+export interface ProviderValidation extends ProviderConfig {
+  available: boolean;
+  version?: string;
+  reason?: string;
+}
+
+export interface RoleBinding {
+  providerId: AgentType;
+  model: string;
+  thinking: ThinkingEffort;
+}
+
+/** Global default binding and instructions for a stable built-in role. */
+export interface RoleConfig {
+  id: RoleId;
+  displayName: string;
+  binding: RoleBinding;
+  instructions: string;
+  /** Provider-specific instructions loaded for the active binding when available. */
+  providerInstructions?: Partial<Record<AgentType, string>>;
+}
+
+/** Per-run changes; omitted fields inherit the global Role binding. */
+export interface RoleBindingOverride {
+  providerId?: AgentType;
+  model?: string;
+  thinking?: ThinkingEffort;
+}
+
+/** Immutable binding captured when a task or handoff starts. */
+export interface RoleExecutionSnapshot {
+  roleId: RoleId;
+  roleName: string;
+  binding: RoleBinding;
+  instructions: string;
+  capturedAt: number;
+}
+
+/** Persistent Settings payload. Runtime overrides are intentionally excluded. */
+export interface SettingsConfig extends ProjectConfig {
+  providers: ProviderConfig[];
+  roles: RoleConfig[];
+}
+
+/** Settings returned to clients, enriched with the latest CLI/SDK availability check. */
+export interface SettingsResponse extends SettingsConfig {
+  providerValidation: ProviderValidation[];
 }
 
 export interface ProjectPathValidation {

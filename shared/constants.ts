@@ -12,6 +12,8 @@ export const VALID_PRIORITIES: readonly Priority[] = ['low', 'medium', 'high', '
 export const VALID_COLUMNS: readonly ColumnId[] = ['backlog', 'in-progress', 'review', 'done'] as const;
 export const VALID_AGENT_STATUSES: readonly AgentStatus[] = ['idle', 'planning', 'executing', 'complete', 'failed'] as const;
 export const VALID_AGENT_TYPES: readonly AgentType[] = ['copilot', 'claude', 'codex', 'opencode', 'hermes', 'openclaw', 'grok'] as const;
+export const VALID_THINKING_EFFORTS: readonly ThinkingEffort[] = ['low', 'medium', 'high'] as const;
+export const BUILT_IN_ROLE_IDS: readonly RoleId[] = ['orchestrator', 'research', 'implementor', 'reviewer', 'knowledge'] as const;
 
 export const VALID_TASK_LIFECYCLE_STATES: readonly TaskLifecycleState[] = ['Draft', 'Inbox', 'Active', 'Done'] as const;
 
@@ -450,6 +452,14 @@ export function isValidAgentStatus(value: unknown): value is AgentStatus {
 
 export function isValidAgentType(value: unknown): value is AgentType {
   return typeof value === 'string' && (VALID_AGENT_TYPES as readonly string[]).includes(value);
+}
+
+export function isValidThinkingEffort(value: unknown): value is ThinkingEffort {
+  return typeof value === 'string' && (VALID_THINKING_EFFORTS as readonly string[]).includes(value);
+}
+
+export function isBuiltInRoleId(value: unknown): value is RoleId {
+  return typeof value === 'string' && (BUILT_IN_ROLE_IDS as readonly string[]).includes(value);
 }
 
 export const MAX_TITLE_LENGTH = 200;
