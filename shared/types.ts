@@ -5,6 +5,188 @@ export type AgentType = 'copilot' | 'claude' | 'codex' | 'opencode' | 'hermes' |
 export type ThinkingEffort = 'low' | 'medium' | 'high';
 export type RoleId = 'orchestrator' | 'research' | 'implementor' | 'reviewer' | 'knowledge';
 
+export type SessionState = 'Ready' | 'Running' | 'Waiting' | 'Completed' | 'Failed';
+export type SessionStateAction = 'noop' | 'start' | 'wait' | 'resume' | 'complete' | 'fail';
+
+export interface SessionStateTransition {
+  from: SessionState;
+  to: SessionState;
+  action: SessionStateAction;
+}
+
+export interface SessionStateError {
+  code: 'invalid_state' | 'invalid_transition' | 'terminal_state_immutable';
+  from: unknown;
+  to: unknown;
+  message: string;
+}
+
+export type SessionStateResult =
+  | { ok: true; state: SessionState; transition: SessionStateTransition }
+  | { ok: false; error: SessionStateError };
+
+export type SessionResultOutcome = 'success' | 'failure';
+
+export interface SessionRecentResult {
+  sessionId: string;
+  outcome: SessionResultOutcome;
+  completedAt: number;
+  summary: string | null;
+  error: string | null;
+}
+
+export interface TaskSessionAssociation {
+  taskId: string;
+  /** Latest admitted business Session, including a terminal Session; null means never executed. */
+  currentSessionId: string | null;
+  /** Latest terminal result; null means no terminal result has been recorded. */
+  recentResult: SessionRecentResult | null;
+}
+
+export interface Session {
+  /** Independent business identity; never use taskId as the Session ID. */
+  id: string;
+  taskId: string;
+  state: SessionState;
+  createdAt: number;
+  updatedAt: number;
+  startedAt: number | null;
+  endedAt: number | null;
+  /** Frozen Phase 2.2 selection; null is valid for legacy/unconfigured execution. */
+  roleExecutionSnapshot: RoleExecutionSnapshot | null;
+  /** Optional link to the immutable orchestration request snapshot. */
+  executionAttemptId: string | null;
+  /** Optional provider SDK identity; absent until Phase 4 adapts a real SDK session. */
+  sdkSessionId: string | null;
+}
+
+export interface CreateSessionInput {
+  id: string;
+  taskId: string;
+  createdAt: number;
+  roleExecutionSnapshot?: RoleExecutionSnapshot | null;
+  executionAttemptId?: string | null;
+  sdkSessionId?: string | null;
+}
+
+export interface SessionResultInput {
+  outcome: SessionResultOutcome;
+  completedAt: number;
+  summary?: string | null;
+  error?: string | null;
+}
+
+export interface SessionContractError {
+  code:
+    | 'invalid_type'
+    | 'required'
+    | 'blank'
+    | 'duplicate_id'
+    | 'same_as_task'
+    | 'task_not_active'
+    | 'task_mismatch'
+    | 'concurrent_session'
+    | 'invalid_transition'
+    | 'terminal_state_immutable'
+    | 'invalid_result'
+    | 'result_already_recorded'
+    | 'stale_session_result';
+  path: string;
+  message: string;
+}
+
+export type SessionContractResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; errors: SessionContractError[] };
+
+/** New domain lifecycle, serialized with exact title case per Phase 2.1. */
+export type TaskLifecycleState = 'Draft' | 'Inbox' | 'Active' | 'Done';
+
+export type TaskLifecycleAction =
+  | 'noop'
+  | 'submit'
+  | 'withdraw'
+  | 'qualify'
+  | 'retry'
+  | 'complete'
+  | 'reopen';
+
+export interface TaskLifecycleTransition {
+  from: TaskLifecycleState;
+  to: TaskLifecycleState;
+  action: TaskLifecycleAction;
+  /** Active → Done is never inferred from an AgentStatus or Session result. */
+  requiresCompletionConfirmation?: boolean;
+}
+
+/** Explicit caller confirmation required for Task lifecycle completion. */
+export interface TaskLifecycleTransitionContext {
+  completionConfirmed?: boolean;
+}
+
+export interface TaskLifecycleError {
+  code: 'invalid_state' | 'invalid_transition' | 'completion_confirmation_required';
+  from: unknown;
+  to: unknown;
+  message: string;
+}
+
+export type TaskLifecycleResult =
+  | { ok: true; state: TaskLifecycleState; transition: TaskLifecycleTransition }
+  | { ok: false; error: TaskLifecycleError };
+
+/** Domain terminology; preserves every existing AgentType wire value. */
+export type ProviderType = AgentType;
+
+export interface RoleExecutionConfig {
+  provider: ProviderType;
+  /** null selects the provider default; a string is scoped to this provider. */
+  model: string | null;
+}
+
+export interface Role {
+  /** Opaque, stable identity assigned by the caller, never derived from the name. */
+  id: string;
+  name: string;
+  responsibility: string;
+  instructions: string;
+  execution: RoleExecutionConfig;
+}
+
+export interface CreateRoleInput {
+  name: string;
+  responsibility: string;
+  instructions: string;
+  execution: { provider: ProviderType; model?: string | null };
+}
+
+export interface UpdateRoleInput {
+  name?: string;
+  responsibility?: string;
+  instructions?: string;
+  execution?: { provider?: ProviderType; model?: string | null };
+}
+
+/** Selection snapshot, not a business Session or an SDK Session. */
+export interface RoleExecutionSnapshot {
+  readonly roleId: string;
+  readonly name: string;
+  readonly responsibility: string;
+  readonly instructions: string;
+  readonly execution: Readonly<RoleExecutionConfig>;
+}
+
+export interface RoleContractError {
+  /** Dotted field path; an empty path denotes the input object itself. */
+  path: string;
+  code: 'required' | 'invalid_type' | 'blank' | 'unknown_field' | 'unknown_provider';
+  message: string;
+}
+
+export type RoleContractResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; errors: RoleContractError[] };
+
 export interface AgentInfo {
   name: AgentType;
   displayName: string;
@@ -42,6 +224,8 @@ export interface Task {
   provenance?: TaskProvenance;
   /** Optional execution limit for this task. Omit to use the server default. */
   timeoutMinutes?: number | null;
+  /** Additive Phase 2.4 association; legacy Task fields remain authoritative until an adapter is defined. */
+  session?: TaskSessionAssociation;
 }
 
 /** A first-class link between two durable Board work items. */
@@ -68,6 +252,8 @@ export interface ExecutionAttempt {
   requestSnapshot: string;
   status: 'pending' | 'dispatched';
   createdAt: number;
+  /** Optional business Session link; old attempts remain valid when absent. */
+  sessionId?: string | null;
 }
 
 export interface TaskProvenance {
