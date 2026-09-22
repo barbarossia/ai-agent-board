@@ -15,15 +15,17 @@ test.describe('Settings provider and role configuration', () => {
     await page.getByRole('button', { name: 'Codex CLI' }).click();
     const command = page.getByLabel('CLI command');
     await command.fill('codex');
-    await expect(page.getByLabel('Default model')).toHaveValue('gpt-5.2-codex');
+    const codexModel = settings.providers.find(provider => provider.id === 'codex')?.defaultModel
+      ?? settings.providers.find(provider => provider.id === 'codex')?.models[0];
+    if (codexModel) await expect(page.getByLabel('Default model')).toHaveValue(codexModel);
     await page.getByRole('button', { name: 'Save provider' }).click();
     await expect(command).toHaveValue('codex');
 
     await page.getByRole('button', { name: 'Roles' }).click();
     await page.getByRole('button', { name: 'Orchestrator' }).click();
-    await expect(page.getByLabel('Model')).toHaveValue('gpt-5.2-codex');
+    if (codexModel) await expect(page.getByLabel('Model')).toHaveValue(codexModel);
     await page.getByRole('button', { name: 'Save role' }).click();
-    await expect(page.getByLabel('Model')).toHaveValue('gpt-5.2-codex');
+    if (codexModel) await expect(page.getByLabel('Model')).toHaveValue(codexModel);
 
     const resolved = await request.post(`${API}/api/settings/roles/orchestrator/resolve`, {
       data: { providerId: 'copilot', model: 'claude-opus-4-20250514', thinking: 'low' },

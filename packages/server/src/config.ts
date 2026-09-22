@@ -38,9 +38,9 @@ function getConfigPath(): string {
 }
 
 const DEFAULT_PROVIDERS: ProviderConfig[] = [
-  { id: 'copilot', displayName: 'GitHub Copilot CLI', enabled: true, cliCommand: 'copilot', commandArgs: [], models: ['claude-opus-4-20250514'], defaultModel: 'claude-opus-4-20250514', capabilities: ['cli', 'coding'] },
-  { id: 'claude', displayName: 'Claude Code', enabled: true, cliCommand: 'claude', commandArgs: [], models: ['claude-opus-4-20250514'], defaultModel: 'claude-opus-4-20250514', capabilities: ['cli', 'coding'] },
-  { id: 'codex', displayName: 'Codex CLI', enabled: true, cliCommand: 'codex', commandArgs: [], models: ['gpt-5.2-codex'], defaultModel: 'gpt-5.2-codex', capabilities: ['cli', 'coding', 'reasoning'] },
+  { id: 'copilot', displayName: 'GitHub Copilot CLI', enabled: true, cliCommand: 'copilot', commandArgs: [], models: [], capabilities: ['cli', 'coding'] },
+  { id: 'claude', displayName: 'Claude Code', enabled: true, cliCommand: 'claude', commandArgs: [], models: [], capabilities: ['cli', 'coding'] },
+  { id: 'codex', displayName: 'Codex CLI', enabled: true, cliCommand: 'codex', commandArgs: [], models: [], capabilities: ['cli', 'coding', 'reasoning'] },
   { id: 'opencode', displayName: 'OpenCode', enabled: true, cliCommand: 'opencode', commandArgs: [], models: [], capabilities: ['cli', 'coding'] },
   { id: 'hermes', displayName: 'Hermes', enabled: true, cliCommand: process.env.HERMES_COMMAND?.trim() || 'hermes', commandArgs: ['--acp'], models: [], capabilities: ['cli', 'coding'] },
   { id: 'openclaw', displayName: 'OpenClaw', enabled: true, cliCommand: process.env.OPENCLAW_COMMAND?.trim() || 'openclaw', commandArgs: ['acp'], models: [], capabilities: ['cli', 'coding'] },
@@ -210,6 +210,31 @@ export function setSettings(settings: SettingsConfig): SettingsConfig {
   if (!cloneRoot) throw new Error('cloneRoot must be a non-empty string');
   const next: SettingsConfig = { ...settings, cloneRoot: path.resolve(expandTilde(cloneRoot)) };
   fs.mkdirSync(next.cloneRoot, { recursive: true });
+  writeConfig(next);
+  cached = next;
+  return next;
+}
+
+export function setProviderModels(providerId: AgentType, models: string[], defaultModel?: string): SettingsConfig {
+  const current = getConfig();
+  const provider = current.providers.find(item => item.id === providerId);
+  if (!provider) return current;
+  const nextModels = [...new Set(models.map(model => model.trim()).filter(Boolean))];
+  const nextDefault = defaultModel && nextModels.includes(defaultModel.trim())
+    ? defaultModel.trim()
+    : provider.defaultModel && nextModels.includes(provider.defaultModel)
+      ? provider.defaultModel
+      : nextModels[0];
+  const next: SettingsConfig = {
+    ...current,
+    providers: current.providers.map(item => item.id === providerId
+      ? { ...item, models: nextModels, defaultModel: nextDefault }
+      : item),
+    roles: current.roles.map(role => role.binding.providerId === providerId && nextDefault && !nextModels.includes(role.binding.model)
+      ? { ...role, binding: { ...role.binding, model: nextDefault } }
+      : role),
+  };
+  if (provider.models.join('\0') === nextModels.join('\0') && provider.defaultModel === nextDefault) return current;
   writeConfig(next);
   cached = next;
   return next;

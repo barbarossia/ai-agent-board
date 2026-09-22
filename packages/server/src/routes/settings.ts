@@ -3,15 +3,25 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { AgentManager } from '../services/agent-manager.js';
 import type { ProviderConfig, RoleBindingOverride, RoleConfig, SettingsConfig, SettingsResponse } from '../types.js';
-import { getConfig, setSettings } from '../config.js';
+import { getConfig, setProviderModels, setSettings } from '../config.js';
 import { parseSettingsConfig, resolveRoleExecution } from '../services/settings-validation.js';
+import { listProviderModels } from '../services/provider-models.js';
 import { isBuiltInRoleId, isValidAgentType } from '@ai-agent-board/shared/constants.js';
 
 const execFileAsync = promisify(execFile);
 
-function settingsResponse(agentManager: AgentManager): SettingsResponse {
-  const settings = getConfig();
+async function settingsResponse(agentManager: AgentManager): Promise<SettingsResponse> {
+  let settings = getConfig();
   const availability = new Map(agentManager.getAvailableAgents().map(agent => [agent.name, agent]));
+  for (const provider of settings.providers) {
+    if (provider.id === 'codex' && (!provider.enabled || !availability.get(provider.id)?.available)) {
+      settings = setProviderModels(provider.id, []);
+      continue;
+    }
+    const discovered = await listProviderModels(provider);
+    settings = setProviderModels(provider.id, discovered.models, discovered.defaultModel);
+  }
+  settings = getConfig();
   return {
     ...settings,
     providerValidation: settings.providers.map((provider) => {
@@ -37,9 +47,9 @@ function replaceRole(settings: SettingsConfig, role: RoleConfig): SettingsConfig
 export function createSettingsRouter(agentManager: AgentManager): Router {
   const router = Router();
 
-  router.get('/', (_req: Request, res: Response) => res.json(settingsResponse(agentManager)));
+  router.get('/', async (_req: Request, res: Response) => res.json(await settingsResponse(agentManager)));
 
-  router.put('/providers/:id', (req: Request, res: Response) => {
+  router.put('/providers/:id', async (req: Request, res: Response) => {
     if (!isValidAgentType(req.params.id)) {
       res.status(400).json({ error: 'unknown provider id' }); return;
     }
@@ -49,7 +59,7 @@ export function createSettingsRouter(agentManager: AgentManager): Router {
       res.status(400).json({ error: parsed }); return;
     }
     setSettings(parsed);
-    res.json(settingsResponse(agentManager));
+    res.json(await settingsResponse(agentManager));
   });
 
   router.post('/providers/:id/test', async (req: Request, res: Response) => {
@@ -81,7 +91,7 @@ export function createSettingsRouter(agentManager: AgentManager): Router {
     }
   });
 
-  router.put('/roles/:id', (req: Request, res: Response) => {
+  router.put('/roles/:id', async (req: Request, res: Response) => {
     if (!isBuiltInRoleId(req.params.id)) {
       res.status(400).json({ error: 'unknown role id' }); return;
     }
@@ -91,7 +101,7 @@ export function createSettingsRouter(agentManager: AgentManager): Router {
       res.status(400).json({ error: parsed }); return;
     }
     setSettings(parsed);
-    res.json(settingsResponse(agentManager));
+    res.json(await settingsResponse(agentManager));
   });
 
   router.post('/roles/:id/resolve', (req: Request, res: Response) => {
