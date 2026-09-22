@@ -96,7 +96,10 @@ async function discoverCopilotModels(provider: ProviderConfig): Promise<Provider
   } catch (error) {
     return { models: [], reason: `Unable to query ${provider.displayName}: ${error instanceof Error ? error.message : String(error)}` };
   } finally {
-    await client.stop().catch(() => undefined);
+    // Model discovery has no sessions to clean up. Force-stop the short-lived
+    // stdio client so the SDK does not write to its destroyed JSON-RPC stream
+    // while the child process is being terminated.
+    await client.forceStop().catch(() => undefined);
   }
 }
 
