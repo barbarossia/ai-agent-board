@@ -1,4 +1,5 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import path from 'node:path';
 import readline from 'node:readline';
 import { CopilotClient, RuntimeConnection } from '@github/copilot-sdk';
 import { createOpencode } from '@opencode-ai/sdk';
@@ -16,6 +17,24 @@ const cache = new Map<string, { expiresAt: number; result: ProviderModelsResult 
 function cached(provider: ProviderConfig): ProviderModelsResult | undefined {
   const entry = cache.get(provider.id);
   return entry && entry.expiresAt > Date.now() ? entry.result : undefined;
+}
+
+function resolveCliPath(command: string): string {
+  if (path.isAbsolute(command)) return command;
+  try {
+    const resolver = process.platform === 'win32' ? 'where.exe' : 'which';
+    const resolved = execFileSync(resolver, [command], {
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .find(Boolean);
+    return resolved || command;
+  } catch {
+    return command;
+  }
 }
 
 function discoverCodexModels(provider: ProviderConfig): Promise<ProviderModelsResult> {
@@ -66,7 +85,7 @@ function discoverCodexModels(provider: ProviderConfig): Promise<ProviderModelsRe
 
 async function discoverCopilotModels(provider: ProviderConfig): Promise<ProviderModelsResult> {
   const client = new CopilotClient({
-    connection: RuntimeConnection.forStdio({ path: provider.cliCommand, args: provider.commandArgs }),
+    connection: RuntimeConnection.forStdio({ path: resolveCliPath(provider.cliCommand), args: provider.commandArgs }),
     logLevel: 'none',
   });
   try {
