@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
+import { CopilotClient, RuntimeConnection } from '@github/copilot-sdk';
+import { createOpencode } from '@opencode-ai/sdk';
 import type { ProviderConfig } from '../types.js';
 
 export interface ProviderModelsResult {
@@ -62,13 +64,50 @@ function discoverCodexModels(provider: ProviderConfig): Promise<ProviderModelsRe
   });
 }
 
+async function discoverCopilotModels(provider: ProviderConfig): Promise<ProviderModelsResult> {
+  const client = new CopilotClient({
+    connection: RuntimeConnection.forStdio({ path: provider.cliCommand, args: provider.commandArgs }),
+    logLevel: 'none',
+  });
+  try {
+    await client.start();
+    const models = await client.listModels();
+    const visible = models.map(model => model.id).filter(Boolean);
+    return { models: [...new Set(visible)] };
+  } catch (error) {
+    return { models: [], reason: `Unable to query ${provider.displayName}: ${error instanceof Error ? error.message : String(error)}` };
+  } finally {
+    await client.stop().catch(() => undefined);
+  }
+}
+
+async function discoverOpenCodeModels(provider: ProviderConfig): Promise<ProviderModelsResult> {
+  let runtime: Awaited<ReturnType<typeof createOpencode>> | undefined;
+  try {
+    runtime = await createOpencode({ timeout: 10_000 });
+    const response = await runtime.client.provider.list({ throwOnError: true });
+    const payload = response.data;
+    const models = payload.all.flatMap(item => Object.keys(item.models).map(modelId => `${item.id}/${modelId}`));
+    const configuredDefault = Object.values(payload.default).find(model => models.includes(model));
+    return { models: [...new Set(models)], defaultModel: configuredDefault };
+  } catch (error) {
+    return { models: [], reason: `Unable to query ${provider.displayName}: ${error instanceof Error ? error.message : String(error)}` };
+  } finally {
+    runtime?.server.close();
+  }
+}
+
 /** Discover models from the provider when its CLI exposes a model catalog. */
 export async function listProviderModels(provider: ProviderConfig): Promise<ProviderModelsResult> {
   const hit = cached(provider);
   if (hit) return hit;
   const result = provider.id === 'codex'
     ? await discoverCodexModels(provider)
-    : { models: [], reason: `${provider.displayName} does not expose a model catalog` };
+    : provider.id === 'copilot'
+      ? await discoverCopilotModels(provider)
+      : provider.id === 'opencode'
+        ? await discoverOpenCodeModels(provider)
+        : { models: [], reason: `${provider.displayName} does not expose a model catalog` };
   cache.set(provider.id, { expiresAt: Date.now() + MODEL_CACHE_TTL_MS, result });
   return result;
 }
