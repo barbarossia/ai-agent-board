@@ -3,6 +3,58 @@ export type ColumnId = 'backlog' | 'in-progress' | 'review' | 'done';
 export type AgentStatus = 'idle' | 'planning' | 'executing' | 'complete' | 'failed';
 export type AgentType = 'copilot' | 'claude' | 'codex' | 'opencode' | 'hermes' | 'openclaw' | 'grok';
 
+/** Domain terminology; preserves every existing AgentType wire value. */
+export type ProviderType = AgentType;
+
+export interface RoleExecutionConfig {
+  provider: ProviderType;
+  /** null selects the provider default; a string is scoped to this provider. */
+  model: string | null;
+}
+
+export interface Role {
+  /** Opaque, stable identity assigned by the caller, never derived from the name. */
+  id: string;
+  name: string;
+  responsibility: string;
+  instructions: string;
+  execution: RoleExecutionConfig;
+}
+
+export interface CreateRoleInput {
+  name: string;
+  responsibility: string;
+  instructions: string;
+  execution: { provider: ProviderType; model?: string | null };
+}
+
+export interface UpdateRoleInput {
+  name?: string;
+  responsibility?: string;
+  instructions?: string;
+  execution?: { provider?: ProviderType; model?: string | null };
+}
+
+/** Selection snapshot, not a business Session or an SDK Session. */
+export interface RoleExecutionSnapshot {
+  readonly roleId: string;
+  readonly name: string;
+  readonly responsibility: string;
+  readonly instructions: string;
+  readonly execution: Readonly<RoleExecutionConfig>;
+}
+
+export interface RoleContractError {
+  /** Dotted field path; an empty path denotes the input object itself. */
+  path: string;
+  code: 'required' | 'invalid_type' | 'blank' | 'unknown_field' | 'unknown_provider';
+  message: string;
+}
+
+export type RoleContractResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; errors: RoleContractError[] };
+
 export interface AgentInfo {
   name: AgentType;
   displayName: string;
