@@ -123,7 +123,8 @@ export function ProjectsPage({
             </button>
             <button
               onClick={() => setConfigOpen(true)}
-              className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-300 transition-colors hover:bg-zinc-700/50 hover:text-white"
+              disabled={!settings}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-300 transition-colors hover:bg-zinc-700/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
               aria-label="Settings"
               title="Settings"
             >

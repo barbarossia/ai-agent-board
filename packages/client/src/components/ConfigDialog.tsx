@@ -86,7 +86,10 @@ export function ConfigDialog({ open, settings, onClose, onSaveCloneRoot, onSaveP
     } finally { setTesting(false); }
   }
 
-  if (!open) return null;
+  // Settings are fetched independently from the projects list. If the server
+  // is unavailable, keep the settings dialog closed instead of showing an
+  // empty modal over the page.
+  if (!open || !settings) return null;
   return (
     <AnimatePresence>
       <motion.div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} />
