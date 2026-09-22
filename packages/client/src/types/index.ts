@@ -4,6 +4,12 @@ export type {
   ColumnId,
   AgentStatus,
   AgentType,
+  TaskLifecycleState,
+  TaskLifecycleAction,
+  TaskLifecycleTransition,
+  TaskLifecycleTransitionContext,
+  TaskLifecycleError,
+  TaskLifecycleResult,
   AgentInfo,
   Project,
   ProjectTaskCounts,
@@ -21,4 +27,13 @@ export type {
   WSMessage,
 } from '../../../../shared/types.js';
 
-export { VALID_TRANSITIONS, MAX_GROUP_CHILDREN, MIN_GROUP_CHILDREN } from '../../../../shared/constants.js';
+export {
+  VALID_TRANSITIONS,
+  VALID_TASK_LIFECYCLE_STATES,
+  TASK_LIFECYCLE_TRANSITIONS,
+  isValidTaskLifecycleState,
+  getTaskLifecycleTransition,
+  transitionTaskLifecycle,
+  MAX_GROUP_CHILDREN,
+  MIN_GROUP_CHILDREN,
+} from '../../../../shared/constants.js';
