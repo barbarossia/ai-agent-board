@@ -13,6 +13,11 @@ import type {
   UpdateProjectRequest,
   ProjectPathValidation,
   ProjectConfig,
+  ProviderConfig,
+  RoleConfig,
+  RoleBindingOverride,
+  RoleExecutionSnapshot,
+  SettingsResponse,
 } from '@/types';
 
 export interface TaskGroupWithChildren extends TaskGroup {
@@ -92,6 +97,17 @@ export const api = {
 
   updateProjectConfig: (cloneRoot: string) =>
     request<ProjectConfig>('/projects/config', { method: 'PATCH', body: JSON.stringify({ cloneRoot }) }),
+
+  getSettings: () => request<SettingsResponse>('/settings'),
+
+  updateProvider: (id: string, provider: ProviderConfig) =>
+    request<SettingsResponse>(`/settings/providers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(provider) }),
+
+  updateRole: (id: string, role: RoleConfig) =>
+    request<SettingsResponse>(`/settings/roles/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(role) }),
+
+  resolveRole: (id: string, override: RoleBindingOverride = {}) =>
+    request<RoleExecutionSnapshot>(`/settings/roles/${encodeURIComponent(id)}/resolve`, { method: 'POST', body: JSON.stringify(override) }),
 
   // --- Task CRUD ---
   getTasks: (includeArchived = false, projectId?: string) =>

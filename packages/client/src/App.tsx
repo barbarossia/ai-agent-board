@@ -530,13 +530,15 @@ export function App() {
   const { theme, toggleTheme } = useTheme();
   const {
     projects,
-    config,
+    settings,
     loading,
     error,
     clearError,
     createProject,
     updateProject,
     deleteProject,
+    updateProvider,
+    updateRole,
     updateConfig,
     validateProjectPath,
     selectProjectDirectory,
@@ -573,7 +575,7 @@ export function App() {
     return (
       <ProjectsPage
         projects={projects}
-        config={config}
+        settings={settings}
         loading={loading}
         error={error}
         initialCreate={route.view === 'projects' ? route.initialCreate ?? null : null}
@@ -584,6 +586,8 @@ export function App() {
         onCreateProject={createProject}
         onUpdateProject={updateProject}
         onDeleteProject={deleteProject}
+        onUpdateProvider={updateProvider}
+        onUpdateRole={updateRole}
         onUpdateConfig={updateConfig}
         onValidateProjectPath={validateProjectPath}
         onSelectProjectDirectory={selectProjectDirectory}

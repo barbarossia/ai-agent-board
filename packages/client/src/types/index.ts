@@ -8,6 +8,16 @@ export type {
   Project,
   ProjectTaskCounts,
   ProjectConfig,
+  ProviderConfig,
+  ProviderValidation,
+  RoleBinding,
+  RoleBindingOverride,
+  RoleConfig,
+  RoleExecutionSnapshot,
+  RoleId,
+  SettingsConfig,
+  SettingsResponse,
+  ThinkingEffort,
   ProjectPathValidation,
   CreateProjectRequest,
   UpdateProjectRequest,
@@ -21,4 +31,4 @@ export type {
   WSMessage,
 } from '../../../../shared/types.js';
 
-export { VALID_TRANSITIONS, MAX_GROUP_CHILDREN, MIN_GROUP_CHILDREN } from '../../../../shared/constants.js';
+export { VALID_TRANSITIONS, MAX_GROUP_CHILDREN, MIN_GROUP_CHILDREN, BUILT_IN_ROLE_IDS, VALID_THINKING_EFFORTS } from '../../../../shared/constants.js';
