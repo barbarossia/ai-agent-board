@@ -151,6 +151,9 @@ agent-sdk-core/
 # Serena AI tooling
 .serena/
 
+# Local CodeGraph index
+.codegraph/
+
 test-results/
 packages/e2e/test-results-old/
 # Squad: ignore runtime state (logs, inbox, sessions)

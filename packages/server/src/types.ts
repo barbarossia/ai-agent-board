@@ -37,6 +37,7 @@ export type {
   ProviderValidation,
   RoleBinding,
   RoleBindingOverride,
+  RoleBindingSnapshot,
   RoleConfig,
   RoleExecutionSnapshot,
   RoleId,

@@ -53,6 +53,9 @@ test('runtime Role override returns an immutable snapshot without changing globa
   assert.notEqual(typeof snapshot, 'string');
   if (typeof snapshot === 'string') return;
   assert.deepEqual(snapshot.binding, { providerId: 'copilot', model: 'claude-opus-4-20250514', thinking: 'low' });
+  assert.deepEqual(Object.keys(snapshot).sort(), ['binding', 'capturedAt', 'instructions', 'roleId', 'roleName']);
+  assert.equal(snapshot.roleId, 'orchestrator');
+  assert.equal(snapshot.roleName, 'orchestrator');
   assert.equal(value.roles.find(role => role.id === 'orchestrator')?.binding.providerId, 'codex');
 });
 

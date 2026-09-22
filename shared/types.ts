@@ -353,6 +353,8 @@ export interface ProviderValidation extends ProviderConfig {
   available: boolean;
   version?: string;
   reason?: string;
+  /** Catalog errors or restrictions, independent of CLI availability. */
+  modelCatalogReason?: string;
 }
 
 export interface RoleBinding {
@@ -379,7 +381,7 @@ export interface RoleBindingOverride {
 }
 
 /** Immutable binding captured when a task or handoff starts. */
-export interface RoleExecutionSnapshot {
+export interface RoleBindingSnapshot {
   roleId: RoleId;
   roleName: string;
   binding: RoleBinding;

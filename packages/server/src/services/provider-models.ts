@@ -2,7 +2,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import path from 'node:path';
 import readline from 'node:readline';
 import { CopilotClient, RuntimeConnection } from '@github/copilot-sdk';
-import { createOpencode } from '@opencode-ai/sdk';
+import { discoverOpenCodeModels } from './opencode-models.js';
 import type { ProviderConfig } from '../types.js';
 
 export interface ProviderModelsResult {
@@ -12,11 +12,15 @@ export interface ProviderModelsResult {
 }
 
 const MODEL_CACHE_TTL_MS = 60_000;
-const cache = new Map<string, { expiresAt: number; result: ProviderModelsResult }>();
+const cache = new Map<string, { key: string; expiresAt: number; result: ProviderModelsResult }>();
+
+function cacheKey(provider: ProviderConfig): string {
+  return JSON.stringify([provider.cliCommand, provider.commandArgs, provider.defaultModel]);
+}
 
 function cached(provider: ProviderConfig): ProviderModelsResult | undefined {
   const entry = cache.get(provider.id);
-  return entry && entry.expiresAt > Date.now() ? entry.result : undefined;
+  return entry && entry.key === cacheKey(provider) && entry.expiresAt > Date.now() ? entry.result : undefined;
 }
 
 function resolveCliPath(command: string): string {
@@ -92,7 +96,14 @@ async function discoverCopilotModels(provider: ProviderConfig): Promise<Provider
     await client.start();
     const models = await client.listModels();
     const visible = models.map(model => model.id).filter(Boolean);
-    return { models: [...new Set(visible)] };
+    return {
+      models: [...new Set(visible)],
+      reason: visible.length === 0
+        ? 'Copilot returned no models. Check your Copilot CLI login and model access.'
+        : visible.every(id => id === 'auto')
+          ? 'Copilot returned only Auto for the current login. Check your Copilot CLI account and model access if you expected more models.'
+          : undefined,
+    };
   } catch (error) {
     return { models: [], reason: `Unable to query ${provider.displayName}: ${error instanceof Error ? error.message : String(error)}` };
   } finally {
@@ -100,22 +111,6 @@ async function discoverCopilotModels(provider: ProviderConfig): Promise<Provider
     // stdio client so the SDK does not write to its destroyed JSON-RPC stream
     // while the child process is being terminated.
     await client.forceStop().catch(() => undefined);
-  }
-}
-
-async function discoverOpenCodeModels(provider: ProviderConfig): Promise<ProviderModelsResult> {
-  let runtime: Awaited<ReturnType<typeof createOpencode>> | undefined;
-  try {
-    runtime = await createOpencode({ timeout: 10_000 });
-    const response = await runtime.client.provider.list({ throwOnError: true });
-    const payload = response.data;
-    const models = payload.all.flatMap(item => Object.keys(item.models).map(modelId => `${item.id}/${modelId}`));
-    const configuredDefault = Object.values(payload.default).find(model => models.includes(model));
-    return { models: [...new Set(models)], defaultModel: configuredDefault };
-  } catch (error) {
-    return { models: [], reason: `Unable to query ${provider.displayName}: ${error instanceof Error ? error.message : String(error)}` };
-  } finally {
-    runtime?.server.close();
   }
 }
 
@@ -130,6 +125,8 @@ export async function listProviderModels(provider: ProviderConfig): Promise<Prov
       : provider.id === 'opencode'
         ? await discoverOpenCodeModels(provider)
         : { models: [], reason: `${provider.displayName} does not expose a model catalog` };
-  cache.set(provider.id, { expiresAt: Date.now() + MODEL_CACHE_TTL_MS, result });
+  if (result.models.length > 0 && !result.reason) {
+    cache.set(provider.id, { key: cacheKey(provider), expiresAt: Date.now() + MODEL_CACHE_TTL_MS, result });
+  }
   return result;
 }

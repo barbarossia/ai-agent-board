@@ -1,4 +1,4 @@
-import type { ProviderConfig, RoleBindingOverride, RoleConfig, RoleExecutionSnapshot, RoleId, SettingsConfig } from '../types.js';
+import type { ProviderConfig, RoleBindingOverride, RoleConfig, RoleBindingSnapshot, RoleId, SettingsConfig } from '../types.js';
 import { BUILT_IN_ROLE_IDS, VALID_AGENT_TYPES, isBuiltInRoleId, isValidAgentType, isValidThinkingEffort } from '@ai-agent-board/shared/constants.js';
 
 function uniqueNonEmptyStrings(value: unknown, field: string): string[] | string {
@@ -96,7 +96,7 @@ export function resolveRoleExecution(
   settings: SettingsConfig,
   roleId: RoleId,
   override: RoleBindingOverride = {},
-): RoleExecutionSnapshot | string {
+): RoleBindingSnapshot | string {
   const role = settings.roles.find(item => item.id === roleId);
   if (!role) return `role ${roleId} is not configured`;
   const providerId = override.providerId ?? role.binding.providerId;

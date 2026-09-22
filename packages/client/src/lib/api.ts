@@ -16,7 +16,7 @@ import type {
   ProviderConfig,
   RoleConfig,
   RoleBindingOverride,
-  RoleExecutionSnapshot,
+  RoleBindingSnapshot,
   SettingsResponse,
 } from '@/types';
 
@@ -110,7 +110,7 @@ export const api = {
     request<SettingsResponse>(`/settings/roles/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(role) }),
 
   resolveRole: (id: string, override: RoleBindingOverride = {}) =>
-    request<RoleExecutionSnapshot>(`/settings/roles/${encodeURIComponent(id)}/resolve`, { method: 'POST', body: JSON.stringify(override) }),
+    request<RoleBindingSnapshot>(`/settings/roles/${encodeURIComponent(id)}/resolve`, { method: 'POST', body: JSON.stringify(override) }),
 
   // --- Task CRUD ---
   getTasks: (includeArchived = false, projectId?: string) =>

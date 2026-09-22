@@ -1,6 +1,6 @@
 import type {
   ColumnId, Priority, AgentStatus, AgentType, CreateRoleInput, UpdateRoleInput,
-  Role, RoleContractError, RoleContractResult, RoleExecutionSnapshot,
+  Role, RoleContractError, RoleContractResult, RoleExecutionSnapshot, RoleId, ThinkingEffort,
   TaskLifecycleAction, TaskLifecycleResult, TaskLifecycleState,
   TaskLifecycleTransition, TaskLifecycleTransitionContext,
   CreateSessionInput, Session, SessionContractError, SessionContractResult,

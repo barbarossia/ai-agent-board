@@ -13,12 +13,16 @@ const execFileAsync = promisify(execFile);
 async function settingsResponse(agentManager: AgentManager): Promise<SettingsResponse> {
   let settings = getConfig();
   const availability = new Map(agentManager.getAvailableAgents().map(agent => [agent.name, agent]));
+  const catalogReasons = new Map<string, string>();
   for (const provider of settings.providers) {
     if (provider.id === 'codex' && (!provider.enabled || !availability.get(provider.id)?.available)) {
       settings = setProviderModels(provider.id, []);
       continue;
     }
     const discovered = await listProviderModels(provider);
+    if (discovered.reason && ['codex', 'copilot', 'opencode'].includes(provider.id)) {
+      catalogReasons.set(provider.id, discovered.reason);
+    }
     settings = setProviderModels(provider.id, discovered.models, discovered.defaultModel);
   }
   settings = getConfig();
@@ -31,6 +35,7 @@ async function settingsResponse(agentManager: AgentManager): Promise<SettingsRes
         available: Boolean(agent?.available) && provider.enabled,
         version: agent?.version,
         reason: !provider.enabled ? 'Disabled in Settings' : agent?.reason,
+        modelCatalogReason: catalogReasons.get(provider.id),
       };
     }),
   };
