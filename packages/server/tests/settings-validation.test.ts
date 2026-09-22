@@ -55,3 +55,24 @@ test('runtime Role override returns an immutable snapshot without changing globa
   assert.deepEqual(snapshot.binding, { providerId: 'copilot', model: 'claude-opus-4-20250514', thinking: 'low' });
   assert.equal(value.roles.find(role => role.id === 'orchestrator')?.binding.providerId, 'codex');
 });
+
+test('resolves embedded instructions for the selected provider without reading external role files', () => {
+  const value = parseSettingsConfig(settings({
+    roles: settings().roles.map(role => role.id === 'reviewer' ? {
+      ...role,
+      providerInstructions: {
+        codex: 'Codex reviewer instruction',
+        copilot: 'Copilot reviewer instruction',
+      },
+    } : role),
+  }));
+  assert.notEqual(typeof value, 'string');
+  if (typeof value === 'string') return;
+  const codex = resolveRoleExecution(value, 'reviewer', { providerId: 'codex', model: 'gpt-5.2-codex' });
+  const copilot = resolveRoleExecution(value, 'reviewer');
+  assert.notEqual(typeof codex, 'string');
+  assert.notEqual(typeof copilot, 'string');
+  if (typeof codex === 'string' || typeof copilot === 'string') return;
+  assert.equal(codex.instructions, 'Codex reviewer instruction');
+  assert.equal(copilot.instructions, 'Copilot reviewer instruction');
+});

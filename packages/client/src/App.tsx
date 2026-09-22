@@ -540,6 +540,7 @@ export function App() {
     updateProvider,
     updateRole,
     updateConfig,
+    testProvider,
     validateProjectPath,
     selectProjectDirectory,
   } = useProjects();
@@ -589,6 +590,7 @@ export function App() {
         onUpdateProvider={updateProvider}
         onUpdateRole={updateRole}
         onUpdateConfig={updateConfig}
+        onTestProvider={testProvider}
         onValidateProjectPath={validateProjectPath}
         onSelectProjectDirectory={selectProjectDirectory}
         onOpenProject={openProject}

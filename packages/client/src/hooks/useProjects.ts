@@ -135,6 +135,16 @@ export function useProjects() {
     }
   }, []);
 
+  const testProvider = useCallback(async (providerId: string, model: string) => {
+    try {
+      setError(null);
+      return await api.testProvider(providerId, model);
+    } catch (err) {
+      setError(`Failed to test provider: ${(err as Error).message}`);
+      return undefined;
+    }
+  }, []);
+
   const updateRole = useCallback(async (role: RoleConfig) => {
     try {
       setError(null);
@@ -164,5 +174,6 @@ export function useProjects() {
     updateProvider,
     updateRole,
     updateConfig,
+    testProvider,
   };
 }

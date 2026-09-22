@@ -159,6 +159,7 @@ export interface ProviderConfig {
   cliCommand: string;
   commandArgs: string[];
   models: string[];
+  defaultModel?: string;
   capabilities: string[];
 }
 
@@ -180,6 +181,8 @@ export interface RoleConfig {
   displayName: string;
   binding: RoleBinding;
   instructions: string;
+  /** Provider-specific instructions loaded for the active binding when available. */
+  providerInstructions?: Partial<Record<AgentType, string>>;
 }
 
 /** Per-run changes; omitted fields inherit the global Role binding. */

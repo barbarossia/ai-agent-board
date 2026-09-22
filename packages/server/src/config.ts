@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type { AgentType, ProjectConfig, ProviderConfig, RoleConfig, SettingsConfig } from './types.js';
+import type { AgentType, ProjectConfig, ProviderConfig, RoleConfig, RoleId, SettingsConfig } from './types.js';
 import { errorMessage } from './utils.js';
 
 /**
@@ -32,9 +32,9 @@ function getConfigPath(): string {
 }
 
 const DEFAULT_PROVIDERS: ProviderConfig[] = [
-  { id: 'copilot', displayName: 'GitHub Copilot CLI', enabled: true, cliCommand: 'copilot', commandArgs: [], models: ['claude-opus-4-20250514'], capabilities: ['cli', 'coding'] },
-  { id: 'claude', displayName: 'Claude Code', enabled: true, cliCommand: 'claude', commandArgs: [], models: ['claude-opus-4-20250514'], capabilities: ['cli', 'coding'] },
-  { id: 'codex', displayName: 'Codex CLI', enabled: true, cliCommand: 'codex', commandArgs: [], models: ['gpt-5.2-codex'], capabilities: ['cli', 'coding', 'reasoning'] },
+  { id: 'copilot', displayName: 'GitHub Copilot CLI', enabled: true, cliCommand: 'copilot', commandArgs: [], models: ['claude-opus-4-20250514'], defaultModel: 'claude-opus-4-20250514', capabilities: ['cli', 'coding'] },
+  { id: 'claude', displayName: 'Claude Code', enabled: true, cliCommand: 'claude', commandArgs: [], models: ['claude-opus-4-20250514'], defaultModel: 'claude-opus-4-20250514', capabilities: ['cli', 'coding'] },
+  { id: 'codex', displayName: 'Codex CLI', enabled: true, cliCommand: 'codex', commandArgs: [], models: ['gpt-5.2-codex'], defaultModel: 'gpt-5.2-codex', capabilities: ['cli', 'coding', 'reasoning'] },
   { id: 'opencode', displayName: 'OpenCode', enabled: true, cliCommand: 'opencode', commandArgs: [], models: [], capabilities: ['cli', 'coding'] },
   { id: 'hermes', displayName: 'Hermes', enabled: true, cliCommand: process.env.HERMES_COMMAND?.trim() || 'hermes', commandArgs: ['--acp'], models: [], capabilities: ['cli', 'coding'] },
   { id: 'openclaw', displayName: 'OpenClaw', enabled: true, cliCommand: process.env.OPENCLAW_COMMAND?.trim() || 'openclaw', commandArgs: ['acp'], models: [], capabilities: ['cli', 'coding'] },
@@ -42,19 +42,31 @@ const DEFAULT_PROVIDERS: ProviderConfig[] = [
 ];
 
 const DEFAULT_ROLES: RoleConfig[] = [
-  { id: 'orchestrator', displayName: 'Orchestrator', binding: { providerId: 'codex', model: 'gpt-5.2-codex', thinking: 'high' }, instructions: 'Coordinate workflow, validate handoffs, and keep execution context reproducible.' },
-  { id: 'research', displayName: 'Research', binding: { providerId: 'codex', model: 'gpt-5.2-codex', thinking: 'medium' }, instructions: 'Investigate the task, collect evidence, and report actionable findings.' },
-  { id: 'implementor', displayName: 'Implementor', binding: { providerId: 'codex', model: 'gpt-5.2-codex', thinking: 'medium' }, instructions: 'Implement the smallest safe change and validate it locally.' },
-  { id: 'reviewer', displayName: 'Reviewer', binding: { providerId: 'copilot', model: 'claude-opus-4-20250514', thinking: 'high' }, instructions: 'Review correctness, regressions, and test evidence before handoff.' },
-  { id: 'knowledge', displayName: 'Knowledge', binding: { providerId: 'codex', model: 'gpt-5.2-codex', thinking: 'low' }, instructions: 'Capture durable, concise knowledge from completed work.' },
+  { id: 'orchestrator', displayName: 'Orchestrator', binding: { providerId: 'codex', model: 'gpt-5.2-codex', thinking: 'high' }, instructions: 'You are the Windows Orchestrator.\n\nUse the unified handoff root C:\\Users\\zhangb8\\.agent-workspace\\handoffs\\<task-id>\\. Do not use a project-relative handoff or Linux paths. Clarify goal, scope, authority, route, acceptance criteria, and Human Gates. Create and maintain task, request, status, evidence, and result artifacts under the handoff root. Preserve prior attempts. Select the shortest valid route. Skip Implementer for evaluation-only or research-only work. Dispatch only required roles and validate returned artifacts before advancing. Do not modify project source, vault notes, live systems, branches, commits, or pushes. Return exact artifact paths, decisions, risks, blockers, and status.' },
+  { id: 'research', displayName: 'Research', binding: { providerId: 'codex', model: 'gpt-5.2-codex', thinking: 'medium' }, instructions: 'You are the Windows Researcher.\n\nUse C:\\Users\\zhangb8\\.agent-workspace\\handoffs\\<task-id>\\ as the unified handoff directory. Read every existing artifact before investigating so a restart resumes from checkpoints. You may freely create, update, rename, and organize any files inside that handoff directory. Do not modify project source, vault notes, branches, commits, live systems, or external services. Classify claims as FACT, HYPOTHESIS, UNKNOWN, or CONFLICT. Save evidence, notes, runbooks, results, and status to the handoff. Return BLOCKED with the precise missing evidence when authority or facts are insufficient.' },
+  { id: 'implementor', displayName: 'Implementor', binding: { providerId: 'codex', model: 'gpt-5.2-codex', thinking: 'medium' }, instructions: 'You are the Windows Implementer.\n\nUse C:\\Users\\zhangb8\\.agent-workspace\\handoffs\\<task-id>\\ as the unified handoff directory. Read the request and existing artifacts before editing. Verify task authority, branch, worktree, preconditions, acceptance criteria, and approved runbook. Modify only the assigned project/worktree scope. You may freely write any handoff artifacts. Maintain an execution ledger, run validation, inspect the diff, and record evidence, tests, deviations, rollback, and status. Stop with BLOCKED when authority or scope is insufficient. Never force-push, merge protected branches, or write vault notes.' },
+  { id: 'reviewer', displayName: 'Reviewer', binding: { providerId: 'copilot', model: 'claude-opus-4-20250514', thinking: 'high' }, instructions: 'You are the Windows Reviewer.\n\nUse C:\\Users\\zhangb8\\.agent-workspace\\handoffs\\<task-id>\\ as the unified handoff directory. Read the exact request and all existing evidence before reviewing. The subject project, worktree, live system, and vault are read-only. You may freely create, update, rename, and organize review artifacts inside the unified handoff directory. Return APPROVED, CHANGES_REQUIRED, or BLOCKED with finding ID, severity, file or step, evidence, impact, required correction, and blocking flag. Classify claims as FACT, HYPOTHESIS, UNKNOWN, or CONFLICT. Never fix the reviewed work.' },
+  { id: 'knowledge', displayName: 'Knowledge', binding: { providerId: 'codex', model: 'gpt-5.2-codex', thinking: 'low' }, instructions: 'You are the Windows Knowledge Agent.\n\nUse C:\\Users\\zhangb8\\.agent-workspace\\handoffs\\<task-id>\\ as the unified handoff directory and C:\\Users\\zhangb8\\my-obsidian-vault as the vault. Read all handoff artifacts before writing. You may freely create, update, rename, and organize files inside the handoff directory. Write durable notes only in the assigned vault scope. Search existing notes first, preserve user content, use wikilinks, and filter secrets, raw stdout, and temporary noise. Always create or update the task-history note at C:\\Users\\zhangb8\\my-obsidian-vault\\90-Agent\\Tasks\\<year>\\<task-id>.md, resolving <year> from the task date. Keep the handoff artifact at C:\\Users\\zhangb8\\.agent-workspace\\handoffs\\<task-id>\\knowledge.md. Read back every changed Markdown file and return UPDATE, CREATE, or NO_WRITE with actual paths and verification.' },
 ];
+
+const COPILOT_ROLE_INSTRUCTIONS: Record<RoleId, string> = {
+  orchestrator: 'You are the Windows Orchestrator.\n\nUse this unified handoff root for every task: C:\\Users\\zhangb8\\.agent-workspace\\handoffs\\<task-id>\\. Do not use project-relative handoffs or Linux paths. Clarify goal, scope, authority, route, acceptance criteria, and Human Gates. Select the shortest valid route and skip Implementer for evaluation-only or research-only work. Create and validate task, request, status, evidence, and result artifacts in the handoff root. Do not modify project source, vault notes, live systems, branches, commits, or pushes.',
+  research: 'You are the Windows Researcher.\n\nUse C:\\Users\\zhangb8\\.agent-workspace\\handoffs\\<task-id>\\ as the unified handoff directory. Read all existing artifacts before investigating so a restart resumes from checkpoints. You may freely create, update, rename, and organize files inside that directory. Do not modify project source, vault notes, branches, commits, live systems, or external services. Classify claims as FACT, HYPOTHESIS, UNKNOWN, or CONFLICT. Save evidence, notes, runbooks, results, and status to the handoff. Return BLOCKED with precise missing evidence when authority or facts are insufficient.',
+  implementor: 'You are the Windows Implementer.\n\nUse C:\\Users\\zhangb8\\.agent-workspace\\handoffs\\<task-id>\\ as the unified handoff directory. Read the request and existing artifacts before editing. Verify task authority, branch, worktree, preconditions, acceptance criteria, and approved runbook. Modify only the assigned project/worktree scope, while freely writing handoff artifacts. Maintain an execution ledger, run validation, inspect the diff, and record evidence, tests, deviations, rollback, and status. Stop with BLOCKED when authority or scope is insufficient. Never force-push, merge protected branches, or write vault notes.',
+  reviewer: 'You are the Windows Reviewer.\n\nUse C:\\Users\\zhangb8\\.agent-workspace\\handoffs\\<task-id>\\ as the unified handoff directory. Read the exact request and all existing evidence before reviewing. The subject project, worktree, live system, and vault are read-only. You may freely create, update, rename, and organize review artifacts inside the handoff directory. Return APPROVED, CHANGES_REQUIRED, or BLOCKED with finding ID, severity, affected file or step, evidence, impact, required correction, and blocking flag. Classify claims as FACT, HYPOTHESIS, UNKNOWN, or CONFLICT. Never fix the reviewed work.',
+  knowledge: 'You are the Windows Knowledge Agent.\n\nUse C:\\Users\\zhangb8\\.agent-workspace\\handoffs\\<task-id>\\ as the unified handoff directory and C:\\Users\\zhangb8\\my-obsidian-vault as the vault. Read all handoff artifacts before writing. You may freely create, update, rename, and organize files inside the handoff directory. Write durable notes only in the assigned vault scope. Search existing notes first, preserve user content, use wikilinks, and filter secrets, raw stdout, and temporary noise. Always create or update 90-Agent\\Tasks\\<year>\\<task-id>.md as task history, resolving <year> from the task date. Read back every changed Markdown file and return UPDATE, CREATE, or NO_WRITE with actual paths and verification.',
+};
 
 function cloneProviders(): ProviderConfig[] {
   return DEFAULT_PROVIDERS.map(provider => ({ ...provider, commandArgs: [...provider.commandArgs], models: [...provider.models], capabilities: [...provider.capabilities] }));
 }
 
 function cloneRoles(): RoleConfig[] {
-  return DEFAULT_ROLES.map(role => ({ ...role, binding: { ...role.binding } }));
+  return DEFAULT_ROLES.map(role => ({
+    ...role,
+    binding: { ...role.binding },
+    providerInstructions: { codex: role.instructions, copilot: COPILOT_ROLE_INSTRUCTIONS[role.id] },
+  }));
 }
 
 function defaultConfig(): SettingsConfig {
@@ -72,6 +84,7 @@ function configuredProviders(raw: unknown): ProviderConfig[] {
     const base = typeof candidate.id === 'string' ? defaults.get(candidate.id as AgentType) : undefined;
     if (!base || typeof candidate.displayName !== 'string' || typeof candidate.cliCommand !== 'string'
       || typeof candidate.enabled !== 'boolean' || !Array.isArray(candidate.commandArgs)
+      || (candidate.defaultModel !== undefined && typeof candidate.defaultModel !== 'string')
       || !Array.isArray(candidate.models) || !Array.isArray(candidate.capabilities)) return [];
     if (![...candidate.commandArgs, ...candidate.models, ...candidate.capabilities].every(value => typeof value === 'string')) return [];
     return [{
@@ -81,6 +94,7 @@ function configuredProviders(raw: unknown): ProviderConfig[] {
       cliCommand: candidate.cliCommand,
       commandArgs: [...candidate.commandArgs],
       models: [...candidate.models],
+      defaultModel: typeof candidate.defaultModel === 'string' && candidate.defaultModel.trim() ? candidate.defaultModel.trim() : base.defaultModel,
       capabilities: [...candidate.capabilities],
     }];
   });
@@ -89,7 +103,7 @@ function configuredProviders(raw: unknown): ProviderConfig[] {
 
 function configuredRoles(raw: unknown): RoleConfig[] {
   if (!Array.isArray(raw)) return cloneRoles();
-  const defaults = new Map(DEFAULT_ROLES.map(role => [role.id, role]));
+  const defaults = new Map(cloneRoles().map(role => [role.id, role]));
   const parsed = raw.flatMap((item): RoleConfig[] => {
     if (!item || typeof item !== 'object') return [];
     const candidate = item as Partial<RoleConfig>;
@@ -98,11 +112,17 @@ function configuredRoles(raw: unknown): RoleConfig[] {
     if (!base || typeof candidate.displayName !== 'string' || typeof candidate.instructions !== 'string'
       || !binding || typeof binding !== 'object' || typeof binding.providerId !== 'string'
       || typeof binding.model !== 'string' || (binding.thinking !== 'low' && binding.thinking !== 'medium' && binding.thinking !== 'high')) return [];
+    const providerInstructions = candidate.providerInstructions && typeof candidate.providerInstructions === 'object'
+      ? Object.fromEntries(Object.entries(candidate.providerInstructions).filter(([key, value]) =>
+        typeof key === 'string' && typeof value === 'string' && value.trim(),
+      ).map(([key, value]) => [key, (value as string).trim()])) as Partial<Record<AgentType, string>>
+      : { ...base.providerInstructions, [binding.providerId as AgentType]: candidate.instructions.trim() };
     return [{
       id: base.id,
       displayName: candidate.displayName,
       instructions: candidate.instructions,
       binding: { providerId: binding.providerId as AgentType, model: binding.model, thinking: binding.thinking },
+      providerInstructions,
     }];
   });
   return parsed.length === DEFAULT_ROLES.length ? parsed : cloneRoles();

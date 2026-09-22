@@ -103,6 +103,9 @@ export const api = {
   updateProvider: (id: string, provider: ProviderConfig) =>
     request<SettingsResponse>(`/settings/providers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(provider) }),
 
+  testProvider: (id: string, model: string) =>
+    request<{ available: boolean; model: string; version?: string; message?: string; error?: string }>(`/settings/providers/${encodeURIComponent(id)}/test`, { method: 'POST', body: JSON.stringify({ model }) }),
+
   updateRole: (id: string, role: RoleConfig) =>
     request<SettingsResponse>(`/settings/roles/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(role) }),
 

@@ -21,6 +21,7 @@ interface ProjectsPageProps {
   onUpdateProvider: (provider: ProviderConfig) => Promise<unknown>;
   onUpdateRole: (role: RoleConfig) => Promise<unknown>;
   onUpdateConfig: (cloneRoot: string) => Promise<unknown>;
+  onTestProvider: (providerId: string, model: string) => Promise<{ available: boolean; model: string; version?: string; message?: string; error?: string } | undefined>;
   onValidateProjectPath: (repoPath: string) => Promise<ProjectPathValidation | undefined>;
   onSelectProjectDirectory: (initialPath?: string) => Promise<string | null | undefined>;
   onOpenProject: (project: Project) => void;
@@ -49,6 +50,7 @@ export function ProjectsPage({
   onUpdateProvider,
   onUpdateRole,
   onUpdateConfig,
+  onTestProvider,
   onValidateProjectPath,
   onSelectProjectDirectory,
   onOpenProject,
@@ -253,6 +255,7 @@ export function ProjectsPage({
         onSaveCloneRoot={onUpdateConfig}
         onSaveProvider={onUpdateProvider}
         onSaveRole={onUpdateRole}
+        onTestProvider={onTestProvider}
       />
 
       <DeleteConfirmDialog

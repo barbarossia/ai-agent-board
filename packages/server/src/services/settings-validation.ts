@@ -21,6 +21,8 @@ function parseProvider(value: unknown): ProviderConfig | string {
   if (typeof commandArgs === 'string' || typeof models === 'string' || typeof capabilities === 'string') {
     return [commandArgs, models, capabilities].find(item => typeof item === 'string') as string;
   }
+  if (provider.defaultModel !== undefined && (typeof provider.defaultModel !== 'string' || !provider.defaultModel.trim())) return 'provider defaultModel must be a non-empty string';
+  if (provider.defaultModel && models.length > 0 && !models.includes(provider.defaultModel.trim())) return `provider defaultModel ${provider.defaultModel.trim()} is not available in provider models`;
   return {
     id: provider.id,
     displayName: provider.displayName.trim(),
@@ -28,6 +30,7 @@ function parseProvider(value: unknown): ProviderConfig | string {
     cliCommand: provider.cliCommand.trim(),
     commandArgs,
     models,
+    defaultModel: provider.defaultModel?.trim() || models[0],
     capabilities,
   };
 }
@@ -50,11 +53,17 @@ function parseRole(value: unknown, providers: ProviderConfig[]): RoleConfig | st
   if (provider.models.length > 0 && !provider.models.includes(binding.model.trim())) {
     return `role model ${binding.model.trim()} is not available for provider ${binding.providerId}`;
   }
+  const providerInstructions = role.providerInstructions && typeof role.providerInstructions === 'object'
+    ? Object.fromEntries(Object.entries(role.providerInstructions).filter(([key, value]) =>
+      isValidAgentType(key) && typeof value === 'string' && value.trim(),
+    ).map(([key, value]) => [key, (value as string).trim()])) as RoleConfig['providerInstructions']
+    : undefined;
   return {
     id: role.id!,
     displayName: role.displayName.trim(),
     binding: { providerId: binding.providerId, model: binding.model.trim(), thinking: binding.thinking },
     instructions: role.instructions.trim(),
+    providerInstructions,
   };
 }
 
@@ -104,7 +113,7 @@ export function resolveRoleExecution(
     roleId: role.id,
     roleName: role.displayName,
     binding: { providerId, model, thinking },
-    instructions: role.instructions,
+    instructions: role.providerInstructions?.[providerId]?.trim() || role.instructions,
     capturedAt: Date.now(),
   };
 }
