@@ -7,11 +7,12 @@ import { errorMessage } from './utils.js';
 /**
  * Agent Board persists its server-side configuration in a JSON file at a fixed
  * location (the "Agent Board home"). The clone root — where repos cloned from a
- * URL are placed — is configurable and defaults to `<home>/projects`.
+ * URL are placed — is configurable and defaults to `~/.agentboard/projects`.
  *
  * The config file deliberately lives at a fixed path (NOT inside the configurable
  * clone root) to avoid a chicken-and-egg problem: we must be able to read the
- * config before we know where the clone root is.
+ * config before we know where the clone root is. By default the settings file
+ * is `~/.agentboard/config/config.json`.
  */
 
 const CONFIG_FILE_NAME = 'config.json';
@@ -24,7 +25,12 @@ function expandTilde(p: string): string {
 
 export function getConfigHome(): string {
   const override = process.env.AGENTBOARD_HOME?.trim();
-  return override ? path.resolve(expandTilde(override)) : path.join(os.homedir(), 'agentboard');
+  return override ? path.resolve(expandTilde(override)) : path.join(os.homedir(), '.agentboard', 'config');
+}
+
+function getDefaultCloneRoot(): string {
+  const override = process.env.AGENTBOARD_HOME?.trim();
+  return override ? path.join(getConfigHome(), 'projects') : path.join(os.homedir(), '.agentboard', 'projects');
 }
 
 function getConfigPath(): string {
@@ -70,7 +76,7 @@ function cloneRoles(): RoleConfig[] {
 }
 
 function defaultConfig(): SettingsConfig {
-  return { cloneRoot: path.join(getConfigHome(), 'projects'), providers: cloneProviders(), roles: cloneRoles() };
+  return { cloneRoot: getDefaultCloneRoot(), providers: cloneProviders(), roles: cloneRoles() };
 }
 
 let cached: SettingsConfig | null = null;
