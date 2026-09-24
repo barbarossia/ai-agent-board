@@ -1,14 +1,15 @@
 import Database from 'better-sqlite3';
-import type { Task, Priority, ColumnId, AgentStatus, AgentType, AgentEvent, TaskRelationship, ExecutionAttempt } from '../types.js';
+import type { Task, Priority, BoardStageId, AgentStatus, AgentType, AgentEvent, TaskRelationship, ExecutionAttempt, Handoff, BoardTransitionRecord } from '../types.js';
 import type { TaskRepository, ContinuationEligibility } from './types.js';
 import { errorMessage } from '../utils.js';
+import { appendHandoff, createTaskHandoffAssociation, isValidColumnId } from '@ai-agent-board/shared/constants.js';
 
 interface TaskRow {
   id: string;
   title: string;
   description: string;
   priority: Priority;
-  column_id: ColumnId;
+  column_id: string;
   agent_status: AgentStatus;
   created_at: number;
   started_at: number | null;
@@ -27,16 +28,38 @@ interface TaskRow {
   external_source: string | null; external_key: string | null; provenance: string | null;
   run_requested_at: number | null; run_claimed_at: number | null;
   timeout_minutes: number | null;
+  board_stage: Task['boardStage'] | null;
+  lifecycle_state: Task['lifecycleState'] | null;
+  latest_handoff_id: string | null;
+}
+
+interface HandoffRow {
+  id: string; task_id: string; card_id: string; source_role_id: string; target_role_id: string;
+  session_id: string | null; session_reference_reason: Handoff['sessionReferenceReason']; created_at: number;
+  previous_handoff_id: string | null;
+  target_stage: BoardStageId;
+  actor_id: string;
+}
+
+function rowToHandoff(row: HandoffRow): Handoff {
+  return Object.freeze({ id: row.id, taskId: row.task_id, cardId: row.card_id, sourceRoleId: row.source_role_id,
+    targetRoleId: row.target_role_id, sessionId: row.session_id, sessionReferenceReason: row.session_reference_reason,
+    createdAt: row.created_at, previousHandoffId: row.previous_handoff_id });
 }
 
 function rowToTask(row: TaskRow): Task {
+  const legacyColumnId = isValidColumnId(row.column_id) ? undefined : row.column_id;
   return {
     id: row.id,
     projectId: row.project_id,
     title: row.title,
     description: row.description,
     priority: row.priority,
-    columnId: row.column_id,
+    columnId: isValidColumnId(row.column_id) ? row.column_id : 'backlog',
+    legacyColumnId,
+    boardStage: row.board_stage,
+    lifecycleState: row.lifecycle_state,
+    handoff: row.latest_handoff_id ? { taskId: row.id, cardId: row.id, latestHandoffId: row.latest_handoff_id } : undefined,
     agentStatus: row.agent_status,
     createdAt: row.created_at,
     startedAt: row.started_at ?? undefined,
@@ -98,10 +121,10 @@ export class SqliteTaskRepository implements TaskRepository {
       getArchived: db.prepare('SELECT * FROM tasks WHERE project_id = ? AND archived = 1 ORDER BY created_at DESC'),
       getById: db.prepare('SELECT * FROM tasks WHERE id = ?'),
       insert: db.prepare(`
-        INSERT INTO tasks (id, project_id, title, description, priority, column_id, agent_status, agent_type, created_at, started_at, completed_at,
-          repo_path, branch_name, base_branch, use_worktree, worktree_path, archived, group_id, group_order, summary, external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes)
-        VALUES (@id, @project_id, @title, @description, @priority, @column_id, @agent_status, @agent_type, @created_at, @started_at, @completed_at,
-          @repo_path, @branch_name, @base_branch, @use_worktree, @worktree_path, @archived, @group_id, @group_order, @summary, @external_source, @external_key, @provenance, @run_requested_at, @run_claimed_at, @timeout_minutes)
+        INSERT INTO tasks (id, project_id, title, description, priority, column_id, board_stage, lifecycle_state, agent_status, agent_type, created_at, started_at, completed_at,
+          repo_path, branch_name, base_branch, use_worktree, worktree_path, archived, group_id, group_order, summary, external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes, latest_handoff_id)
+        VALUES (@id, @project_id, @title, @description, @priority, @column_id, @board_stage, @lifecycle_state, @agent_status, @agent_type, @created_at, @started_at, @completed_at,
+          @repo_path, @branch_name, @base_branch, @use_worktree, @worktree_path, @archived, @group_id, @group_order, @summary, @external_source, @external_key, @provenance, @run_requested_at, @run_claimed_at, @timeout_minutes, @latest_handoff_id)
       `),
       update: db.prepare(`
         UPDATE tasks SET
@@ -109,6 +132,8 @@ export class SqliteTaskRepository implements TaskRepository {
           description = @description,
           priority = @priority,
           column_id = @column_id,
+          board_stage = @board_stage,
+          lifecycle_state = @lifecycle_state,
           agent_status = @agent_status,
           agent_type = @agent_type,
           started_at = @started_at,
@@ -121,6 +146,7 @@ export class SqliteTaskRepository implements TaskRepository {
           archived = @archived,
           summary = @summary, run_requested_at = @run_requested_at, run_claimed_at = @run_claimed_at,
           timeout_minutes = @timeout_minutes
+          , latest_handoff_id = @latest_handoff_id
         WHERE id = @id
       `),
       delete: db.prepare('DELETE FROM tasks WHERE id = ?'),
@@ -169,6 +195,8 @@ export class SqliteTaskRepository implements TaskRepository {
       description: task.description,
       priority: task.priority,
       column_id: task.columnId,
+      board_stage: task.boardStage ?? null,
+      lifecycle_state: task.lifecycleState ?? null,
       agent_status: task.agentStatus,
       agent_type: task.agentType ?? 'copilot',
       created_at: task.createdAt,
@@ -185,6 +213,7 @@ export class SqliteTaskRepository implements TaskRepository {
       summary: task.summary ?? null, external_source: task.externalSource ?? null, external_key: task.externalKey ?? null,
       provenance: task.provenance ? JSON.stringify(task.provenance) : null, run_requested_at: task.runRequestedAt ?? null, run_claimed_at: task.runClaimedAt ?? null,
       timeout_minutes: task.timeoutMinutes ?? null,
+      latest_handoff_id: task.handoff?.latestHandoffId ?? null,
     });
   }
 
@@ -217,6 +246,8 @@ export class SqliteTaskRepository implements TaskRepository {
         description: merged.description,
         priority: merged.priority,
         column_id: merged.columnId,
+        board_stage: merged.boardStage ?? null,
+        lifecycle_state: merged.lifecycleState ?? null,
         agent_status: merged.agentStatus,
         agent_type: merged.agentType,
         started_at: merged.startedAt ?? null,
@@ -229,6 +260,7 @@ export class SqliteTaskRepository implements TaskRepository {
         archived: merged.archived ? 1 : 0,
         summary: merged.summary ?? null, run_requested_at: merged.runRequestedAt ?? null, run_claimed_at: merged.runClaimedAt ?? null,
         timeout_minutes: merged.timeoutMinutes ?? null,
+        latest_handoff_id: merged.handoff?.latestHandoffId ?? null,
       });
       return merged;
   }
@@ -290,6 +322,35 @@ export class SqliteTaskRepository implements TaskRepository {
 
   async getArchivedTasks(projectId = 'default'): Promise<Task[]> {
     return (this.stmts.getArchived.all(projectId) as TaskRow[]).map(rowToTask);
+  }
+
+  async getHandoffs(taskId: string): Promise<BoardTransitionRecord[]> {
+    return (this.db.prepare('SELECT * FROM task_handoffs WHERE task_id = ? ORDER BY created_at, rowid').all(taskId) as HandoffRow[])
+      .map((row) => ({ handoff: rowToHandoff(row), targetStage: row.target_stage, actorId: row.actor_id }));
+  }
+
+  async transitionBoardCard(taskId: string, expectedStage: BoardStageId, updates: Partial<Task>, handoff: Handoff, targetStage: BoardStageId, actorId: string): Promise<Task | undefined> {
+    return this.db.transaction(() => {
+      const row = this.stmts.getById.get(taskId) as TaskRow | undefined;
+      if (!row) return undefined;
+      const existing = rowToTask(row);
+      if (existing.boardStage !== expectedStage) return undefined;
+      const owner = { taskId: existing.id, cardId: existing.id };
+      const association = existing.handoff
+        ? { ok: true as const, value: existing.handoff }
+        : createTaskHandoffAssociation(owner);
+      if (!association.ok) return undefined;
+      const knownHandoffs = this.db.prepare('SELECT id FROM task_handoffs WHERE task_id = ?').all(taskId) as Array<{ id: string }>;
+      const appended = appendHandoff(association.value, owner, handoff, association.value.latestHandoffId,
+        knownHandoffs.map((item) => item.id));
+      if (!appended.ok) return undefined;
+      this.db.prepare(`INSERT INTO task_handoffs
+        (id, task_id, card_id, source_role_id, target_role_id, session_id, session_reference_reason, created_at, previous_handoff_id, target_stage, actor_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(handoff.id, handoff.taskId, handoff.cardId, handoff.sourceRoleId, handoff.targetRoleId, handoff.sessionId,
+          handoff.sessionReferenceReason, handoff.createdAt, handoff.previousHandoffId, targetStage, actorId);
+      return this.updateExisting(existing, { ...updates, handoff: appended.value });
+    })();
   }
 
   async getRelationships(taskId: string): Promise<TaskRelationship[]> {

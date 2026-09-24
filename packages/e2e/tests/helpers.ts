@@ -92,12 +92,14 @@ export async function fillLocalPath(page: Page, repoPath = prepareTestRepo()): P
   return repoPath;
 }
 
-/** Wait for the board to render all four column headings. */
+/** Wait for the board to render all six lifecycle column headings. */
 export async function waitForBoard(page: Page) {
-  await expect(page.getByRole('heading', { name: 'Backlog', exact: true })).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByRole('heading', { name: 'In Progress', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Draft', exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Research', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Implement', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Review', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Done', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Knowledge', exact: true })).toBeVisible();
 }
 
 /** Create a task via the REST API. Returns the parsed JSON response. */

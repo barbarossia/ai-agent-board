@@ -13,8 +13,8 @@ import {
   CollisionDetection,
 } from '@dnd-kit/core';
 import { motion } from 'framer-motion';
-import type { Task, ColumnId, Column as ColumnType } from '@/types';
-import { VALID_TRANSITIONS } from '@/types';
+import type { Task, BoardStageId, Column as ColumnType } from '@/types';
+import { BOARD_STAGE_TRANSITIONS, mapLegacyColumnToBoard } from '@/types';
 import { columns as baseColumns } from '@/lib/columns';
 import { Column } from './Column';
 import { TaskCard } from './TaskCard';
@@ -26,8 +26,9 @@ import { cn } from '@/lib/utils';
 interface BoardProps {
   tasks: Task[];
   groups?: TaskGroupWithChildren[];
-  getTasksByColumn: (columnId: ColumnId) => Task[];
-  onMoveTask: (taskId: string, targetColumn: ColumnId) => void;
+  getTasksByStage: (stage: BoardStageId) => Task[];
+  onMoveTask: (taskId: string, targetStage: BoardStageId) => void;
+  onCompleteTask?: (taskId: string) => void;
   onTaskClick: (task: Task) => void;
   onEditTask?: (task: Task) => void;
   onDeleteTask?: (task: Task) => void;
@@ -35,7 +36,6 @@ interface BoardProps {
   onUnarchiveTask?: (task: Task) => void;
   onRetryTask?: (task: Task) => void;
   onAddTask: () => void;
-  onDropInProgress?: (task: Task) => void;
   showArchived?: boolean;
   onClickGroup?: (group: TaskGroupWithChildren) => void;
   onRunGroup?: (id: string) => void;
@@ -55,8 +55,9 @@ const kanbanCollision: CollisionDetection = (args) => {
 export function Board({
   tasks,
   groups = [],
-  getTasksByColumn,
+  getTasksByStage,
   onMoveTask,
+  onCompleteTask,
   onTaskClick,
   onEditTask,
   onDeleteTask,
@@ -64,7 +65,6 @@ export function Board({
   onUnarchiveTask,
   onRetryTask,
   onAddTask,
-  onDropInProgress,
   showArchived = false,
   onClickGroup,
   onRunGroup,
@@ -81,7 +81,7 @@ export function Board({
     return [
       ...baseColumns,
       {
-        id: 'archived' as ColumnId,
+        id: 'archived' as const,
         title: 'Archived',
         color: 'bg-zinc-500',
         icon: 'archive'
@@ -89,15 +89,15 @@ export function Board({
     ];
   }, [showArchived]);
 
-  const getTasksForColumn = useCallback((columnId: ColumnId | string) => {
+  const getTasksForColumn = useCallback((columnId: string) => {
     if (columnId === 'archived') {
       return tasks.filter(t => t.archived === true);
     }
-    return getTasksByColumn(columnId as ColumnId);
-  }, [tasks, getTasksByColumn]);
+    return getTasksByStage(columnId as BoardStageId);
+  }, [tasks, getTasksByStage]);
 
-  const getGroupsForColumn = useCallback((columnId: ColumnId | string) => {
-    return groups.filter(g => g.columnId === columnId && !g.archived);
+  const getGroupsForColumn = useCallback((columnId: string) => {
+    return groups.filter(g => mapLegacyColumnToBoard(g.columnId)?.boardStage === columnId && !g.archived);
   }, [groups]);
 
   // Mouse: small distance threshold keeps desktop drag/drop snappy.
@@ -183,33 +183,26 @@ export function Board({
 
       // Resolve target column
       const isColumn = columns.some((c) => c.id === overId);
-      let targetColumn: ColumnId;
+      let targetStage: BoardStageId;
       if (isColumn) {
-        targetColumn = overId as ColumnId;
+        if (overId === 'archived') return;
+        targetStage = overId as BoardStageId;
       } else {
         const overTask = tasks.find((t) => t.id === overId);
-        if (!overTask) return;
-        targetColumn = overTask.columnId;
+        if (!overTask?.boardStage) return;
+        targetStage = overTask.boardStage;
       }
 
       // Don't allow moving archived tasks
       if (draggedTask.archived) return;
 
       // Don't allow dropping into archived column
-      if ((targetColumn as string) === 'archived') return;
+      if (!draggedTask.boardStage || targetStage === draggedTask.boardStage) return;
+      if (!BOARD_STAGE_TRANSITIONS[draggedTask.boardStage]?.includes(targetStage)) return;
 
-      // Validate transition before moving
-      if (targetColumn === draggedTask.columnId) return;
-      if (!VALID_TRANSITIONS[draggedTask.columnId]?.includes(targetColumn)) return;
-
-      onMoveTask(taskId, targetColumn);
-
-      // Auto-open agent panel when dropped into in-progress
-      if (targetColumn === 'in-progress' && onDropInProgress) {
-        onDropInProgress(draggedTask);
-      }
+      onMoveTask(taskId, targetStage);
     },
-    [onMoveTask, onDropInProgress, tasks, columns]
+    [onMoveTask, tasks, columns]
   );
 
   const handleDragCancel = useCallback(() => {
@@ -226,6 +219,16 @@ export function Board({
       onDragCancel={handleDragCancel}
     >
       <div className="flex h-full min-h-0 flex-col">
+        {tasks.some((task) => !task.boardStage || !task.lifecycleState) && (
+          <section className="mx-3 mt-3 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm" aria-label="Unmapped legacy cards">
+            <p className="font-medium">Some legacy Cards need explicit recovery before they can move.</p>
+            <ul className="mt-1 list-inside list-disc text-xs text-muted-foreground">
+              {tasks.filter((task) => !task.boardStage || !task.lifecycleState).map((task) => (
+                <li key={task.id}>{task.title} — legacy column “{task.legacyColumnId ?? task.columnId}”</li>
+              ))}
+            </ul>
+          </section>
+        )}
         {/*
           Touch-first horizontal rail: columns stay side-by-side on every
           viewport. On phones/tablets (<lg) the rail is swipeable with CSS
@@ -244,7 +247,7 @@ export function Board({
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: index * 0.1, duration: 0.3 }}
-            className="h-full w-[88vw] max-w-[26rem] shrink-0 snap-start sm:w-72 lg:w-80 lg:max-w-none"
+            className="h-full w-[88vw] max-w-[26rem] shrink-0 snap-start sm:w-72 lg:w-[calc((100vw-8rem)/6)] lg:min-w-48 lg:max-w-80"
           >
             <Column
               column={column}
@@ -255,7 +258,8 @@ export function Board({
               onArchiveTask={onArchiveTask}
               onUnarchiveTask={onUnarchiveTask}
               onRetryTask={onRetryTask}
-              onAddTask={column.id === 'backlog' ? onAddTask : undefined}
+              onCompleteTask={onCompleteTask}
+              onAddTask={column.id === 'draft' ? onAddTask : undefined}
               extraContent={
                 getGroupsForColumn(column.id).map((g) => (
                   <TaskGroupCard

@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
-import type { Task, AgentType, ColumnId } from '@/types';
-import { VALID_TRANSITIONS } from '@/types';
+import type { Task, AgentType, BoardStageId } from '@/types';
+import { BOARD_STAGE_TRANSITIONS } from '@/types';
 import { api, connectWS } from '@/lib/api';
 
 const getProjectId = (task: Task) => task.projectId ?? 'default';
@@ -66,43 +66,33 @@ export function useTasks(projectId = 'default') {
     }
   }, []);
 
-  const moveTask = useCallback((taskId: string, targetColumn: ColumnId) => {
-    setTasks((prev) => {
-      const task = prev.find((t) => t.id === taskId);
-      if (!task) return prev;
-      // Block invalid transitions
-      if (!VALID_TRANSITIONS[task.columnId]?.includes(targetColumn)) return prev;
+  const moveTask = useCallback(async (taskId: string, targetStage: BoardStageId) => {
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task?.boardStage || !BOARD_STAGE_TRANSITIONS[task.boardStage]?.includes(targetStage)) return;
+    try {
+      const updated = await api.moveCard(taskId, targetStage);
+      setTasks((prev) => prev.map((item) => (item.id === taskId ? updated : item)));
+    } catch (err) {
+      const error = err as Error;
+      setError(`Move failed: ${error.message}`);
+      try {
+        setTasks(await api.getTasks(showArchived, projectId));
+      } catch (fetchErr) {
+        setError(`Move failed and could not refresh: ${(fetchErr as Error).message}`);
+      }
+    }
+  }, [tasks, showArchived, projectId]);
 
-      return prev.map((t) => {
-        if (t.id !== taskId) return t;
-        const updates: Partial<Task> = { columnId: targetColumn };
-        // Reset agent state when moving to in-progress
-        if (targetColumn === 'in-progress') {
-          updates.agentStatus = 'idle';
-          updates.startedAt = undefined;
-          updates.completedAt = undefined;
-        }
-        return { ...t, ...updates };
-      });
-    });
-    // Sync to server (server also validates + resets)
-    api.updateTask(taskId, { columnId: targetColumn })
-      .then((updated) => {
-        setTasks((prev) => prev.map((t) => (t.id === taskId ? updated : t)));
-        if (targetColumn === 'in-progress' && updated.agentStatus === 'idle') {
-          void runTask(taskId);
-        }
-      })
-      .catch((err) => {
-        console.error('[moveTask] server rejected:', err);
-        setError(`Move failed: ${err.message}`);
-        // Revert optimistic update by re-fetching
-        api.getTasks(showArchived, projectId).then(setTasks).catch((fetchErr) => {
-          console.error('[moveTask] re-fetch also failed:', fetchErr);
-          setError(`Move failed and could not refresh: ${fetchErr.message}`);
-        });
-      });
-  }, [showArchived, projectId, runTask]);
+  const completeTask = useCallback(async (id: string) => {
+    try {
+      const updated = await api.completeTask(id);
+      setTasks((prev) => prev.map((item) => (item.id === id ? updated : item)));
+      return updated;
+    } catch (err) {
+      setError(`Failed to complete task: ${(err as Error).message}`);
+      return undefined;
+    }
+  }, []);
 
   const configureAndRunTask = useCallback(async (
     id: string,
@@ -196,5 +186,5 @@ export function useTasks(projectId = 'default') {
 
   const clearError = useCallback(() => setError(null), []);
 
-  return { tasks, error, clearError, showArchived, setShowArchived, addTask, updateTask, moveTask, runTask, stopTask, deleteTask, archiveTask, unarchiveTask, configureAndRunTask, createPR, mergeLocal, cleanupWorktree };
+  return { tasks, error, clearError, showArchived, setShowArchived, addTask, updateTask, moveTask, completeTask, runTask, stopTask, deleteTask, archiveTask, unarchiveTask, configureAndRunTask, createPR, mergeLocal, cleanupWorktree };
 }

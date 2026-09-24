@@ -1,5 +1,5 @@
 import type {
-  ColumnId, Priority, AgentStatus, AgentType, CreateRoleInput, UpdateRoleInput,
+  ColumnId, BoardStageId, Priority, AgentStatus, AgentType, CreateRoleInput, UpdateRoleInput,
   Role, RoleContractError, RoleContractResult, RoleExecutionSnapshot, RoleId, ThinkingEffort,
   TaskLifecycleAction, TaskLifecycleResult, TaskLifecycleState,
   TaskLifecycleTransition, TaskLifecycleTransitionContext,
@@ -13,6 +13,14 @@ import type {
 
 export const VALID_PRIORITIES: readonly Priority[] = ['low', 'medium', 'high', 'critical'] as const;
 export const VALID_COLUMNS: readonly ColumnId[] = ['backlog', 'in-progress', 'review', 'done'] as const;
+export const BOARD_STAGE_ORDER: readonly BoardStageId[] = ['draft', 'inbox', 'research', 'implement', 'review', 'knowledge'] as const;
+export const BOARD_STAGE_ROLE: Readonly<Partial<Record<BoardStageId, string>>> = {
+  inbox: 'orchestrator', research: 'research', implement: 'implementor', review: 'reviewer', knowledge: 'knowledge',
+};
+export const BOARD_STAGE_TRANSITIONS: Readonly<Record<BoardStageId, readonly BoardStageId[]>> = {
+  draft: ['inbox'], inbox: ['research'], research: ['implement'], implement: ['review'],
+  review: ['implement', 'knowledge'], knowledge: [],
+};
 export const VALID_AGENT_STATUSES: readonly AgentStatus[] = ['idle', 'planning', 'executing', 'complete', 'failed'] as const;
 export const VALID_AGENT_TYPES: readonly AgentType[] = ['copilot', 'claude', 'codex', 'opencode', 'hermes', 'openclaw', 'grok'] as const;
 export const VALID_THINKING_EFFORTS: readonly ThinkingEffort[] = ['low', 'medium', 'high'] as const;
@@ -641,6 +649,22 @@ export function isValidPriority(value: unknown): value is Priority {
 
 export function isValidColumnId(value: unknown): value is ColumnId {
   return typeof value === 'string' && (VALID_COLUMNS as readonly string[]).includes(value);
+}
+
+export function isValidBoardStageId(value: unknown): value is BoardStageId {
+  return typeof value === 'string' && (BOARD_STAGE_ORDER as readonly string[]).includes(value);
+}
+
+/** Explicit one-time adapter for legacy rows. Unknown values remain unmapped and retain column_id. */
+export function mapLegacyColumnToBoard(columnId: unknown): { boardStage: BoardStageId; lifecycleState: TaskLifecycleState } | null {
+  switch (columnId) {
+    case 'backlog': return { boardStage: 'draft', lifecycleState: 'Draft' };
+    case 'in-progress': return { boardStage: 'implement', lifecycleState: 'Active' };
+    case 'review': return { boardStage: 'review', lifecycleState: 'Active' };
+    // Legacy Done is treated as a historical Human-confirmed completion.
+    case 'done': return { boardStage: 'knowledge', lifecycleState: 'Done' };
+    default: return null;
+  }
 }
 
 export function isValidAgentStatus(value: unknown): value is AgentStatus {

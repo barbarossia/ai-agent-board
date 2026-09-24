@@ -2,6 +2,7 @@
 export type {
   Priority,
   ColumnId,
+  BoardStageId,
   AgentStatus,
   AgentType,
   SessionState,
@@ -17,6 +18,10 @@ export type {
   SessionResultInput,
   SessionContractError,
   SessionContractResult,
+  Handoff,
+  HandoffOwner,
+  TaskHandoffAssociation,
+  BoardTransitionRecord,
   TaskLifecycleState,
   TaskLifecycleAction,
   TaskLifecycleTransition,
@@ -52,6 +57,11 @@ export type {
 
 export {
   VALID_TRANSITIONS,
+  BOARD_STAGE_ORDER,
+  BOARD_STAGE_ROLE,
+  BOARD_STAGE_TRANSITIONS,
+  isValidBoardStageId,
+  mapLegacyColumnToBoard,
   isValidPriority,
   isValidColumnId,
   isValidAgentStatus,

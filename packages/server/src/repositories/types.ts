@@ -1,4 +1,4 @@
-import type { Task, AgentEvent, TaskRelationship, ExecutionAttempt } from '../types.js';
+import type { Task, AgentEvent, TaskRelationship, ExecutionAttempt, BoardStageId, Handoff, BoardTransitionRecord } from '../types.js';
 
 export interface OrchestrationAggregateResult {
   task: Task;
@@ -26,6 +26,9 @@ export interface TaskRepository {
   clearRun(id: string): Promise<Task | undefined>;
   getPendingRuns(staleBefore?: number): Promise<Task[]>;
   update(id: string, updates: Partial<Task>): Promise<Task | undefined>;
+  getHandoffs(taskId: string): Promise<BoardTransitionRecord[]>;
+  /** Atomically append one immutable Handoff and advance the Card stage/head. */
+  transitionBoardCard(taskId: string, expectedStage: BoardStageId, updates: Partial<Task>, handoff: Handoff, targetStage: BoardStageId, actorId: string): Promise<Task | undefined>;
   delete(id: string): Promise<boolean>;
   count(): Promise<number>;
   insertEvent(event: AgentEvent): Promise<void>;

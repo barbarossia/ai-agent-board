@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
-import type { Task, AgentType, Priority, ColumnId, Project } from '@/types';
+import type { Task, AgentType, Priority, ColumnId, BoardStageId, Project } from '@/types';
 import { useTheme } from '@/hooks/useTheme';
 import { useTasks } from '@/hooks/useTasks';
 import { useProjects } from '@/hooks/useProjects';
@@ -60,7 +60,7 @@ function BoardPage({
     defaultBaseBranch: project.defaultBaseBranch,
     defaultUseWorktree: project.defaultUseWorktree,
   };
-  const { tasks, error, clearError, showArchived, setShowArchived, addTask, updateTask, moveTask, runTask, stopTask, deleteTask, archiveTask, unarchiveTask, configureAndRunTask, createPR, mergeLocal, cleanupWorktree } = useTasks(project.id);
+  const { tasks, error, clearError, showArchived, setShowArchived, addTask, updateTask, moveTask, completeTask, runTask, stopTask, deleteTask, archiveTask, unarchiveTask, configureAndRunTask, createPR, mergeLocal, cleanupWorktree } = useTasks(project.id);
   const { groups, createGroup, runGroup, stopGroup, deleteGroup, updateGroup, refreshGroup } = useTaskGroups(project.id);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
@@ -193,8 +193,8 @@ function BoardPage({
     }
   }, [sortBy, sortDir]);
 
-  const getFilteredTasksByColumn = useCallback(
-    (columnId: ColumnId) => filteredTasks.filter((t) => t.columnId === columnId).sort(sortTasks),
+  const getFilteredTasksByStage = useCallback(
+    (stage: BoardStageId) => filteredTasks.filter((t) => t.boardStage === stage).sort(sortTasks),
     [filteredTasks, sortTasks]
   );
 
@@ -401,8 +401,9 @@ function BoardPage({
         <Board
           tasks={filteredTasks}
           groups={groups}
-          getTasksByColumn={getFilteredTasksByColumn}
+          getTasksByStage={getFilteredTasksByStage}
           onMoveTask={moveTask}
+          onCompleteTask={(id) => { void completeTask(id); }}
           onTaskClick={handleTaskClick}
           onEditTask={handleEditTask}
           onDeleteTask={handleDeleteTask}
@@ -411,7 +412,6 @@ function BoardPage({
           onRetryTask={handleRetryTask}
           onAddTask={handleOpenDialog}
           showArchived={showArchived}
-          onDropInProgress={(task) => setSelectedTaskId(task.id)}
           onClickGroup={handleClickGroup}
           onRunGroup={runGroup}
           onStopGroup={stopGroup}

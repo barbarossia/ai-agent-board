@@ -12,11 +12,11 @@ let testRepo = '';
 let copilotAvailable = false;
 
 async function waitForBoard(page: Page) {
-  await expect(page.getByRole('heading', { name: 'Backlog' })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('heading', { name: 'Draft' })).toBeVisible({ timeout: 10_000 });
 }
 
 async function createTaskViaUI(page: Page, title: string, description: string) {
-  const backlogHeading = page.getByRole('heading', { name: 'Backlog' });
+  const backlogHeading = page.getByRole('heading', { name: 'Draft' });
   const headerRow = backlogHeading.locator('..').locator('..');
   await headerRow.locator('button').first().click();
   await expect(page.getByRole('heading', { name: 'Create Task' })).toBeVisible();

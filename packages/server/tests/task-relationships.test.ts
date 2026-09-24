@@ -17,12 +17,15 @@ function makeDb() {
   db.pragma('foreign_keys=ON');
   db.exec(`
     CREATE TABLE tasks (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL,
-      priority TEXT, column_id TEXT, agent_status TEXT, agent_type TEXT, created_at INTEGER, started_at INTEGER,
+      priority TEXT, column_id TEXT, board_stage TEXT, lifecycle_state TEXT, latest_handoff_id TEXT, agent_status TEXT, agent_type TEXT, created_at INTEGER, started_at INTEGER,
       completed_at INTEGER, repo_path TEXT, branch_name TEXT, base_branch TEXT, use_worktree INTEGER,
       worktree_path TEXT, archived INTEGER, group_id TEXT, group_order INTEGER, summary TEXT, external_source TEXT,
       external_key TEXT, provenance TEXT, run_requested_at INTEGER, run_claimed_at INTEGER, timeout_minutes INTEGER);
     CREATE UNIQUE INDEX identity ON tasks(external_source,external_key) WHERE external_source IS NOT NULL AND external_key IS NOT NULL;
     CREATE TABLE events(id TEXT,task_id TEXT,type TEXT,content TEXT,timestamp INTEGER,metadata TEXT);
+    CREATE TABLE task_handoffs(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, card_id TEXT NOT NULL, source_role_id TEXT NOT NULL,
+      target_role_id TEXT NOT NULL, session_id TEXT, session_reference_reason TEXT NOT NULL, created_at INTEGER NOT NULL,
+      previous_handoff_id TEXT, target_stage TEXT NOT NULL, actor_id TEXT NOT NULL);
     CREATE TABLE task_relationships(task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
       related_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, type TEXT NOT NULL DEFAULT 'related',
       created_at INTEGER NOT NULL, PRIMARY KEY(task_id,related_task_id), CHECK(task_id < related_task_id));

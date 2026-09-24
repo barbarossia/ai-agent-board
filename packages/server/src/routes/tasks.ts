@@ -1,11 +1,13 @@
 import { Router, Request, Response } from 'express';
 import path from 'path';
+import { v4 as uuid } from 'uuid';
 import type { Project, Task } from '../types.js';
-import { isValidPriority, isValidColumnId, isValidAgentStatus, isValidAgentType, isValidAgentTimeoutMinutes, VALID_AGENT_TYPES, VALID_TRANSITIONS, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MIN_AGENT_TIMEOUT_MINUTES, MAX_AGENT_TIMEOUT_MINUTES } from '@ai-agent-board/shared/constants.js';
+import { BOARD_STAGE_ROLE, BOARD_STAGE_TRANSITIONS, createHandoff, isValidBoardStageId, isValidPriority, isValidColumnId, isValidAgentStatus, isValidAgentType, isValidAgentTimeoutMinutes, transitionTaskLifecycle, VALID_AGENT_TYPES, VALID_TRANSITIONS, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MIN_AGENT_TIMEOUT_MINUTES, MAX_AGENT_TIMEOUT_MINUTES } from '@ai-agent-board/shared/constants.js';
 import type { TaskRepository } from '../repositories/types.js';
 import type { ProjectRepository } from '../repositories/project-types.js';
 import { broadcast } from '../websocket.js';
 import type { AgentManager } from '../services/agent-manager.js';
+import { getConfig } from '../config.js';
 import {
   asyncHandler, paramId, isAllowedRepoPath, expandTilde,
   validateTaskFields, buildTask, broadcastTaskUpdate,
@@ -152,6 +154,91 @@ export function createTaskRouter(repo: TaskRepository, agentManager: AgentManage
       ...relationship,
       relatedTask: await repo.getById(relationship.relatedTaskId),
     }))));
+  }));
+
+  router.get('/:id/handoffs', asyncHandler(async (req: Request, res: Response) => {
+    const task = await repo.getById(paramId(req));
+    if (!task) { res.status(404).json({ error: 'task not found' }); return; }
+    res.json(await repo.getHandoffs(task.id));
+  }));
+
+  // Human drag is an explicit Board command. It never changes a legacy column.
+  router.post('/:id/board-stage', asyncHandler(async (req: Request, res: Response) => {
+    const task = await repo.getById(paramId(req));
+    if (!task) { res.status(404).json({ error: 'task not found' }); return; }
+    const targetStage: unknown = req.body?.targetStage;
+    if (!isValidBoardStageId(targetStage)) { res.status(400).json({ error: 'invalid Board stage' }); return; }
+    if (!task.boardStage || !task.lifecycleState) {
+      res.status(409).json({ error: 'legacy Card stage is unmapped and needs explicit recovery', legacyColumnId: task.legacyColumnId ?? task.columnId }); return;
+    }
+    if (!BOARD_STAGE_TRANSITIONS[task.boardStage].includes(targetStage)) {
+      res.status(400).json({ error: `Cannot move Card from ${task.boardStage} to ${targetStage}` }); return;
+    }
+    if (targetStage !== 'inbox' && task.lifecycleState !== 'Active') {
+      res.status(409).json({ error: 'Task must be Active before entering this Board stage' }); return;
+    }
+    if (targetStage === 'research' && task.agentStatus !== 'complete') {
+      res.status(409).json({ error: 'Orchestrator must complete Inbox validation before Research' }); return;
+    }
+    if (targetStage === 'inbox') {
+      if (agentManager.isRunning(task.id)) { res.status(409).json({ error: 'an Agent Session is already running for this Card' }); return; }
+    }
+
+    let lifecycleState = task.lifecycleState;
+    if (targetStage === 'inbox') {
+      const submitted = transitionTaskLifecycle(lifecycleState, 'Inbox');
+      if (!submitted.ok) { res.status(409).json({ error: submitted.error.message, code: submitted.error.code }); return; }
+      const admitted = transitionTaskLifecycle(submitted.state, 'Active');
+      if (!admitted.ok) { res.status(409).json({ error: admitted.error.message, code: admitted.error.code }); return; }
+      lifecycleState = admitted.state;
+    }
+
+    const targetRoleId = BOARD_STAGE_ROLE[targetStage];
+    if (!targetRoleId) { res.status(400).json({ error: 'target stage has no Role assignment' }); return; }
+    const history = await repo.getHandoffs(task.id);
+    const sourceRoleId = history.at(-1)?.handoff.targetRoleId ?? 'human';
+    const handoffId = uuid();
+    const createdAt = Date.now();
+    const handoffResult = createHandoff(
+      { taskId: task.id, cardId: task.id },
+      { id: handoffId, taskId: task.id, cardId: task.id, sourceRoleId, targetRoleId, sessionId: null,
+        sessionReferenceReason: 'session_not_created', createdAt, previousHandoffId: history.at(-1)?.handoff.id ?? null },
+      ['human', 'orchestrator', 'research', 'implementor', 'reviewer', 'knowledge'],
+    );
+    if (!handoffResult.ok) { res.status(409).json({ error: handoffResult.errors[0]?.message ?? 'invalid Handoff' }); return; }
+
+    const updates: Partial<Task> = { boardStage: targetStage, lifecycleState };
+    if (targetStage === 'inbox') {
+      updates.agentStatus = 'planning';
+      updates.startedAt = createdAt;
+      updates.completedAt = undefined;
+    }
+    const updated = await repo.transitionBoardCard(task.id, task.boardStage, updates, handoffResult.value, targetStage, 'human');
+    if (!updated) { res.status(409).json({ error: 'Card changed during the move; refresh and retry' }); return; }
+    broadcastTaskUpdate(updated);
+
+    if (targetStage === 'inbox') {
+      const started = await startOrchestrator(updated, repo, agentManager);
+      if (!started) {
+        const failed = await repo.update(task.id, { agentStatus: 'failed', completedAt: Date.now() });
+        if (failed) { broadcastTaskUpdate(failed); res.json(failed); return; }
+      }
+    }
+    res.json(await repo.getById(task.id) ?? updated);
+  }));
+
+  router.post('/:id/complete', asyncHandler(async (req: Request, res: Response) => {
+    const task = await repo.getById(paramId(req));
+    if (!task) { res.status(404).json({ error: 'task not found' }); return; }
+    if (req.body?.completionConfirmed !== true || task.boardStage !== 'knowledge' || task.lifecycleState !== 'Active') {
+      res.status(409).json({ error: 'explicit completion confirmation is required for an Active Knowledge Card' }); return;
+    }
+    const transition = transitionTaskLifecycle(task.lifecycleState, 'Done', { completionConfirmed: true });
+    if (!transition.ok) { res.status(409).json({ error: transition.error.message, code: transition.error.code }); return; }
+    const updated = await repo.update(task.id, { lifecycleState: transition.state });
+    if (!updated) { res.status(500).json({ error: 'failed to complete task' }); return; }
+    broadcastTaskUpdate(updated);
+    res.json(updated);
   }));
 
   router.post('/:id/relationships', asyncHandler(async (req: Request, res: Response) => {
@@ -363,7 +450,7 @@ export function createTaskRouter(repo: TaskRepository, agentManager: AgentManage
       res.status(404).json({ error: 'task not found' });
       return;
     }
-    if (task.columnId !== 'done' && task.agentStatus !== 'failed') {
+    if (task.columnId !== 'done' && task.lifecycleState !== 'Done' && task.agentStatus !== 'failed') {
       res.status(400).json({ error: 'can only archive completed or failed tasks' });
       return;
     }
@@ -407,6 +494,34 @@ export function createTaskRouter(repo: TaskRepository, agentManager: AgentManage
   }));
 
   return router;
+}
+
+async function startOrchestrator(task: Task, repo: TaskRepository, agentManager: AgentManager): Promise<boolean> {
+  const config = getConfig();
+  const role = config.roles.find((item) => item.id === 'orchestrator');
+  const provider = role && config.providers.find((item) => item.id === role.binding.providerId);
+  const available = role && agentManager.getAvailableAgents().find((item) => item.name === role.binding.providerId);
+  if (!role || !provider?.enabled || !available?.available) return false;
+
+  await repo.requestRun(task.id, Date.now());
+  const claimed = await repo.claimRun(task.id, Date.now());
+  if (!claimed) return false;
+  const handoffRoot = `C:\\Users\\zhangb8\\.agent-workspace\\handoffs\\${task.id}`;
+  const roleInstructions = role.instructions.replaceAll('<task-id>', task.id);
+  const executionTask: Task = {
+    ...claimed,
+    agentType: role.binding.providerId,
+    description: `${roleInstructions}\n\nBoard Card ${task.id} has entered Inbox. Validate the request and return an orchestration plan in your final summary. Do not move the Card or execute Research/Implement/Review/Knowledge work; those require later Human drags. Unified handoff root: ${handoffRoot}.`,
+  };
+  agentManager.startAgent(executionTask, async (status) => {
+    if (status === 'complete' || status === 'failed') await repo.clearRun(task.id);
+    const updated = await repo.update(task.id, {
+      agentStatus: status,
+      ...(status === 'complete' || status === 'failed' ? { completedAt: Date.now() } : {}),
+    });
+    if (updated) broadcastTaskUpdate(updated);
+  });
+  return true;
 }
 
 function sanitizeProvenance(value: unknown): Record<string, unknown> | undefined {

@@ -1,5 +1,7 @@
 export type Priority = 'low' | 'medium' | 'high' | 'critical';
 export type ColumnId = 'backlog' | 'in-progress' | 'review' | 'done';
+/** Board presentation stage; independent from legacy ColumnId and Task lifecycle. */
+export type BoardStageId = 'draft' | 'inbox' | 'research' | 'implement' | 'review' | 'knowledge';
 export type AgentStatus = 'idle' | 'planning' | 'executing' | 'complete' | 'failed';
 export type AgentType = 'copilot' | 'claude' | 'codex' | 'opencode' | 'hermes' | 'openclaw' | 'grok';
 export type ThinkingEffort = 'low' | 'medium' | 'high';
@@ -163,6 +165,13 @@ export interface TaskHandoffAssociation extends HandoffOwner {
   latestHandoffId: string | null;
 }
 
+/** Board audit metadata attached to an immutable Handoff append. */
+export interface BoardTransitionRecord {
+  handoff: Handoff;
+  targetStage: BoardStageId;
+  actorId: string;
+}
+
 export interface HandoffContractError {
   code:
     | 'invalid_type'
@@ -288,6 +297,12 @@ export interface Task {
   description: string;
   priority: Priority;
   columnId: ColumnId;
+  /** Null means a legacy column value could not be mapped safely. */
+  boardStage?: BoardStageId | null;
+  /** Null means a legacy column value could not be mapped safely. */
+  lifecycleState?: TaskLifecycleState | null;
+  /** Original unrecognized legacy column value, exposed for explicit recovery. */
+  legacyColumnId?: string;
   agentStatus: AgentStatus;
   createdAt: number;
   startedAt?: number;
@@ -533,7 +548,7 @@ export interface AgentEvent {
 }
 
 export interface Column {
-  id: ColumnId;
+  id: BoardStageId | 'archived';
   title: string;
   color: string;
   icon: string;

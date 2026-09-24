@@ -496,7 +496,7 @@ test.describe('Backward compatibility', () => {
   test('board UI still renders correctly', async ({ page }) => {
     await page.goto('/');
     await waitForBoard(page);
-    for (const col of ['Backlog', 'In Progress', 'Review', 'Done']) {
+    for (const col of ['Draft', 'Inbox', 'Research', 'Implement', 'Review', 'Knowledge']) {
       await expect(page.getByRole('heading', { name: col, exact: true })).toBeVisible();
     }
   });
