@@ -168,7 +168,7 @@ test.describe('Task CRUD', () => {
     let runRequests = 0;
     await page.route(`**/api/tasks/${taskId}/board-stage`, async (route) => {
       stageRequests += 1;
-      expect(route.request().postDataJSON()).toEqual({ targetStage: 'inbox' });
+      expect(route.request().postDataJSON()).toEqual({ targetStage: 'inbox', targetRoleId: 'orchestrator' });
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -207,6 +207,7 @@ test.describe('Task CRUD', () => {
     await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 20 });
     await page.mouse.up();
 
+    await page.getByRole('dialog').getByRole('button', { name: 'Validate move' }).click();
     await expect.poll(() => stageRequests).toBe(1);
     expect(runRequests).toBe(0);
   });

@@ -2,6 +2,7 @@ import { Pool } from 'pg';
 import { v4 as uuid } from 'uuid';
 import type { TaskGroup, Task, Priority, ColumnId, AgentType, AgentStatus } from '../types.js';
 import type { TaskGroupRepository } from './group-types.js';
+import { mapLegacyColumnToBoard } from '@ai-agent-board/shared/constants.js';
 
 interface GroupRow {
   id: string;
@@ -40,6 +41,8 @@ interface TaskRow {
   group_id: string | null;
   group_order: number | null;
   timeout_minutes: number | null;
+  board_stage: Task['boardStage'] | null;
+  lifecycle_state: Task['lifecycleState'] | null;
 }
 
 function rowToGroup(row: GroupRow): TaskGroup {
@@ -68,6 +71,8 @@ function rowToTask(row: TaskRow): Task {
     description: row.description,
     priority: row.priority as Priority,
     columnId: row.column_id as ColumnId,
+    boardStage: row.board_stage,
+    lifecycleState: row.lifecycle_state,
     agentStatus: row.agent_status as AgentStatus,
     createdAt: Number(row.created_at),
     startedAt: row.started_at != null ? Number(row.started_at) : undefined,
@@ -126,6 +131,7 @@ export class PostgresTaskGroupRepository implements TaskGroupRepository {
       for (let i = 0; i < children.length; i++) {
         const child = children[i];
         const taskId = child.id || uuid();
+        const lifecycle = mapLegacyColumnToBoard(group.columnId);
         const task: Task = {
           id: taskId,
           projectId: group.projectId,
@@ -133,6 +139,8 @@ export class PostgresTaskGroupRepository implements TaskGroupRepository {
           description: child.description,
           priority: child.priority ?? group.priority,
           columnId: group.columnId,
+          boardStage: lifecycle?.boardStage ?? null,
+          lifecycleState: lifecycle?.lifecycleState ?? null,
           agentStatus: 'idle',
           createdAt: group.createdAt,
           repoPath: group.repoPath,
@@ -145,10 +153,10 @@ export class PostgresTaskGroupRepository implements TaskGroupRepository {
         };
 
         await client.query(
-          `INSERT INTO tasks (id, project_id, title, description, priority, column_id, agent_status, agent_type,
+          `INSERT INTO tasks (id, project_id, title, description, priority, column_id, board_stage, lifecycle_state, agent_status, agent_type,
             created_at, repo_path, base_branch, use_worktree, branch_name, archived, group_id, group_order)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-          [task.id, task.projectId, task.title, task.description, task.priority, task.columnId, task.agentStatus,
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+          [task.id, task.projectId, task.title, task.description, task.priority, task.columnId, task.boardStage ?? null, task.lifecycleState ?? null, task.agentStatus,
            task.agentType ?? 'copilot', task.createdAt, task.repoPath ?? null,
            task.baseBranch ?? null, task.useWorktree ?? null, task.branchName ?? null,
            false, group.id, task.groupOrder ?? i],

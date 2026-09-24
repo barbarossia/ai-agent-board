@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
 import path from 'path';
 import { v4 as uuid } from 'uuid';
-import type { Project, Task } from '../types.js';
-import { BOARD_STAGE_ROLE, BOARD_STAGE_TRANSITIONS, createHandoff, isValidBoardStageId, isValidPriority, isValidColumnId, isValidAgentStatus, isValidAgentType, isValidAgentTimeoutMinutes, transitionTaskLifecycle, VALID_AGENT_TYPES, VALID_TRANSITIONS, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MIN_AGENT_TIMEOUT_MINUTES, MAX_AGENT_TIMEOUT_MINUTES } from '@ai-agent-board/shared/constants.js';
+import type { Project, RoleConfig, Task } from '../types.js';
+import { BOARD_STAGE_TRANSITIONS, createHandoff, isValidBoardStageId, isValidPriority, isValidColumnId, isValidAgentStatus, isValidAgentType, isValidAgentTimeoutMinutes, transitionTaskLifecycle, VALID_AGENT_TYPES, VALID_TRANSITIONS, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MIN_AGENT_TIMEOUT_MINUTES, MAX_AGENT_TIMEOUT_MINUTES } from '@ai-agent-board/shared/constants.js';
 import type { TaskRepository } from '../repositories/types.js';
 import type { ProjectRepository } from '../repositories/project-types.js';
 import { broadcast } from '../websocket.js';
@@ -167,6 +167,7 @@ export function createTaskRouter(repo: TaskRepository, agentManager: AgentManage
     const task = await repo.getById(paramId(req));
     if (!task) { res.status(404).json({ error: 'task not found' }); return; }
     const targetStage: unknown = req.body?.targetStage;
+    const targetRoleId: unknown = req.body?.targetRoleId;
     if (!isValidBoardStageId(targetStage)) { res.status(400).json({ error: 'invalid Board stage' }); return; }
     if (!task.boardStage || !task.lifecycleState) {
       res.status(409).json({ error: 'legacy Card stage is unmapped and needs explicit recovery', legacyColumnId: task.legacyColumnId ?? task.columnId }); return;
@@ -174,15 +175,20 @@ export function createTaskRouter(repo: TaskRepository, agentManager: AgentManage
     if (!BOARD_STAGE_TRANSITIONS[task.boardStage].includes(targetStage)) {
       res.status(400).json({ error: `Cannot move Card from ${task.boardStage} to ${targetStage}` }); return;
     }
+    if (typeof targetRoleId !== 'string') { res.status(400).json({ error: 'targetRoleId is required' }); return; }
+    const config = getConfig();
+    const targetRole = config.roles.find((role) => role.id === targetRoleId);
+    if (!targetRole) { res.status(400).json({ error: 'targetRoleId is not a configured Role' }); return; }
     if (targetStage !== 'inbox' && task.lifecycleState !== 'Active') {
       res.status(409).json({ error: 'Task must be Active before entering this Board stage' }); return;
     }
     if (targetStage === 'research' && task.agentStatus !== 'complete') {
       res.status(409).json({ error: 'Orchestrator must complete Inbox validation before Research' }); return;
     }
-    if (targetStage === 'inbox') {
-      if (agentManager.isRunning(task.id)) { res.status(409).json({ error: 'an Agent Session is already running for this Card' }); return; }
-    }
+    if (agentManager.isRunning(task.id)) { res.status(409).json({ error: 'an Agent Session is already running for this Card' }); return; }
+
+    const validation = await validateBoardMoveWithOrchestrator(task, targetStage, targetRole, repo, agentManager);
+    if (!validation.ok) { res.status(409).json({ error: validation.error }); return; }
 
     let lifecycleState = task.lifecycleState;
     if (targetStage === 'inbox') {
@@ -193,37 +199,23 @@ export function createTaskRouter(repo: TaskRepository, agentManager: AgentManage
       lifecycleState = admitted.state;
     }
 
-    const targetRoleId = BOARD_STAGE_ROLE[targetStage];
-    if (!targetRoleId) { res.status(400).json({ error: 'target stage has no Role assignment' }); return; }
     const history = await repo.getHandoffs(task.id);
     const sourceRoleId = history.at(-1)?.handoff.targetRoleId ?? 'human';
     const handoffId = uuid();
     const createdAt = Date.now();
     const handoffResult = createHandoff(
       { taskId: task.id, cardId: task.id },
-      { id: handoffId, taskId: task.id, cardId: task.id, sourceRoleId, targetRoleId, sessionId: null,
+      { id: handoffId, taskId: task.id, cardId: task.id, sourceRoleId, targetRoleId: targetRole.id, sessionId: null,
         sessionReferenceReason: 'session_not_created', createdAt, previousHandoffId: history.at(-1)?.handoff.id ?? null },
-      ['human', 'orchestrator', 'research', 'implementor', 'reviewer', 'knowledge'],
+      ['human', ...config.roles.map((role) => role.id)],
     );
     if (!handoffResult.ok) { res.status(409).json({ error: handoffResult.errors[0]?.message ?? 'invalid Handoff' }); return; }
 
     const updates: Partial<Task> = { boardStage: targetStage, lifecycleState };
-    if (targetStage === 'inbox') {
-      updates.agentStatus = 'planning';
-      updates.startedAt = createdAt;
-      updates.completedAt = undefined;
-    }
     const updated = await repo.transitionBoardCard(task.id, task.boardStage, updates, handoffResult.value, targetStage, 'human');
     if (!updated) { res.status(409).json({ error: 'Card changed during the move; refresh and retry' }); return; }
     broadcastTaskUpdate(updated);
 
-    if (targetStage === 'inbox') {
-      const started = await startOrchestrator(updated, repo, agentManager);
-      if (!started) {
-        const failed = await repo.update(task.id, { agentStatus: 'failed', completedAt: Date.now() });
-        if (failed) { broadcastTaskUpdate(failed); res.json(failed); return; }
-      }
-    }
     res.json(await repo.getById(task.id) ?? updated);
   }));
 
@@ -496,32 +488,77 @@ export function createTaskRouter(repo: TaskRepository, agentManager: AgentManage
   return router;
 }
 
-async function startOrchestrator(task: Task, repo: TaskRepository, agentManager: AgentManager): Promise<boolean> {
+async function validateBoardMoveWithOrchestrator(
+  task: Task,
+  targetStage: string,
+  targetRole: RoleConfig,
+  repo: TaskRepository,
+  agentManager: AgentManager,
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const config = getConfig();
-  const role = config.roles.find((item) => item.id === 'orchestrator');
-  const provider = role && config.providers.find((item) => item.id === role.binding.providerId);
-  const available = role && agentManager.getAvailableAgents().find((item) => item.name === role.binding.providerId);
-  if (!role || !provider?.enabled || !available?.available) return false;
+  const orchestrator = config.roles.find((role) => role.id === 'orchestrator');
+  const provider = orchestrator && config.providers.find((item) => item.id === orchestrator.binding.providerId);
+  const available = orchestrator && agentManager.getAvailableAgents().find((item) => item.name === orchestrator.binding.providerId);
+  if (!orchestrator || !provider?.enabled || !available?.available) {
+    return { ok: false, error: 'Configured Orchestrator provider is unavailable; Card stage and Handoff were not changed' };
+  }
+  const targetProvider = config.providers.find((item) => item.id === targetRole.binding.providerId);
+  if (!targetProvider?.enabled) return { ok: false, error: `Provider for Role ${targetRole.displayName} is disabled` };
 
-  await repo.requestRun(task.id, Date.now());
-  const claimed = await repo.claimRun(task.id, Date.now());
-  if (!claimed) return false;
-  const handoffRoot = `C:\\Users\\zhangb8\\.agent-workspace\\handoffs\\${task.id}`;
-  const roleInstructions = role.instructions.replaceAll('<task-id>', task.id);
+  const startedAt = Date.now();
+  const instructions = orchestrator.instructions.replaceAll('<task-id>', task.id);
   const executionTask: Task = {
-    ...claimed,
-    agentType: role.binding.providerId,
-    description: `${roleInstructions}\n\nBoard Card ${task.id} has entered Inbox. Validate the request and return an orchestration plan in your final summary. Do not move the Card or execute Research/Implement/Review/Knowledge work; those require later Human drags. Unified handoff root: ${handoffRoot}.`,
+    ...task,
+    title: `Validate Board move: ${task.title}`,
+    description: [
+      instructions,
+      `Validate this requested Board move before it is committed. Current stage: ${task.boardStage}. Requested stage: ${targetStage}. Human-selected target Role: ${targetRole.id} (${targetRole.displayName}).`,
+      `Selected Role instructions: ${targetRole.instructions}`,
+      'Check that the Task request is suitable for this stage and Role. Do not perform Role work, modify the Card, or execute the selected Role.',
+      'At the end of your final answer include exactly one marker: BOARD_MOVE_VALIDATION: APPROVED or BOARD_MOVE_VALIDATION: REJECTED. Use REJECTED if the request is unclear, unsafe, or unsuitable.',
+    ].join('\n\n'),
+    agentType: orchestrator.binding.providerId,
+    useWorktree: false,
+    worktreePath: undefined,
+    timeoutMinutes: 5,
   };
-  agentManager.startAgent(executionTask, async (status) => {
-    if (status === 'complete' || status === 'failed') await repo.clearRun(task.id);
-    const updated = await repo.update(task.id, {
-      agentStatus: status,
-      ...(status === 'complete' || status === 'failed' ? { completedAt: Date.now() } : {}),
-    });
-    if (updated) broadcastTaskUpdate(updated);
+
+  const previousEventIds = new Set((await repo.getEventsByTaskId(task.id)).map((event) => event.id));
+  await repo.update(task.id, { agentStatus: 'planning', startedAt, completedAt: undefined });
+  return new Promise((resolve) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      finish('failed', 'Orchestrator validation timed out; Card stage and Handoff were not changed');
+    }, 5 * 60_000 + 15_000);
+    const finish = async (status: Task['agentStatus'], fallbackError?: string) => {
+      if (settled) return;
+      if (status !== 'complete' && status !== 'failed') return;
+      settled = true;
+      clearTimeout(timeout);
+      try {
+        const updated = await repo.update(task.id, { agentStatus: status, completedAt: Date.now() });
+        if (updated) broadcastTaskUpdate(updated);
+        if (status !== 'complete') {
+          resolve({ ok: false, error: fallbackError ?? 'Orchestrator validation failed; Card stage and Handoff were not changed' });
+          return;
+        }
+        const events = await repo.getEventsByTaskId(task.id);
+        const output = events.find((event) => event.type === 'complete' && event.metadata?.finalOutput === true && !previousEventIds.has(event.id))?.content ?? '';
+        if (/\bBOARD_MOVE_VALIDATION:\s*APPROVED\b/.test(output) && !/\bBOARD_MOVE_VALIDATION:\s*REJECTED\b/.test(output)) {
+          resolve({ ok: true });
+        } else {
+          resolve({ ok: false, error: 'Orchestrator did not approve the requested move; Card stage and Handoff were not changed' });
+        }
+      } catch (err) {
+        resolve({ ok: false, error: `Orchestrator validation could not be recorded; Card stage and Handoff were not changed${err instanceof Error ? `: ${err.message}` : ''}` });
+      }
+    };
+    try {
+      agentManager.startAgent(executionTask, (status) => { void finish(status); });
+    } catch (err) {
+      void finish('failed', `Orchestrator validation could not start: ${err instanceof Error ? err.message : String(err)}`);
+    }
   });
-  return true;
 }
 
 function sanitizeProvenance(value: unknown): Record<string, unknown> | undefined {

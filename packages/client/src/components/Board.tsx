@@ -13,8 +13,8 @@ import {
   CollisionDetection,
 } from '@dnd-kit/core';
 import { motion } from 'framer-motion';
-import type { Task, BoardStageId, Column as ColumnType } from '@/types';
-import { BOARD_STAGE_TRANSITIONS, mapLegacyColumnToBoard } from '@/types';
+import type { Task, BoardStageId, Column as ColumnType, RoleConfig } from '@/types';
+import { BOARD_STAGE_ROLE, BOARD_STAGE_TRANSITIONS, mapLegacyColumnToBoard } from '@/types';
 import { columns as baseColumns } from '@/lib/columns';
 import { Column } from './Column';
 import { TaskCard } from './TaskCard';
@@ -26,8 +26,9 @@ import { cn } from '@/lib/utils';
 interface BoardProps {
   tasks: Task[];
   groups?: TaskGroupWithChildren[];
+  roles: RoleConfig[];
   getTasksByStage: (stage: BoardStageId) => Task[];
-  onMoveTask: (taskId: string, targetStage: BoardStageId) => void;
+  onMoveTask: (taskId: string, targetStage: BoardStageId, targetRoleId: string) => void;
   onCompleteTask?: (taskId: string) => void;
   onTaskClick: (task: Task) => void;
   onEditTask?: (task: Task) => void;
@@ -55,6 +56,7 @@ const kanbanCollision: CollisionDetection = (args) => {
 export function Board({
   tasks,
   groups = [],
+  roles,
   getTasksByStage,
   onMoveTask,
   onCompleteTask,
@@ -73,6 +75,16 @@ export function Board({
   onEditGroup,
 }: BoardProps) {
   const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const [pendingMove, setPendingMove] = useState<{ taskId: string; targetStage: BoardStageId } | null>(null);
+  const [selectedRoleId, setSelectedRoleId] = useState('');
+
+  useEffect(() => {
+    if (!pendingMove) return;
+    const preferredRoleId = BOARD_STAGE_ROLE[pendingMove.targetStage];
+    setSelectedRoleId(roles.some((role) => role.id === preferredRoleId)
+      ? preferredRoleId!
+      : roles[0]?.id ?? '');
+  }, [pendingMove, roles]);
 
   // Dynamically add archived column when showArchived is true
   const columns = useMemo(() => {
@@ -200,9 +212,9 @@ export function Board({
       if (!draggedTask.boardStage || targetStage === draggedTask.boardStage) return;
       if (!BOARD_STAGE_TRANSITIONS[draggedTask.boardStage]?.includes(targetStage)) return;
 
-      onMoveTask(taskId, targetStage);
+      setPendingMove({ taskId, targetStage });
     },
-    [onMoveTask, tasks, columns]
+    [tasks, columns]
   );
 
   const handleDragCancel = useCallback(() => {
@@ -309,6 +321,45 @@ export function Board({
           </span>
         </nav>
       </div>
+
+      {pendingMove && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" role="presentation">
+          <section role="dialog" aria-modal="true" aria-labelledby="board-move-role-title" className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-xl">
+            <h2 id="board-move-role-title" className="text-lg font-semibold">Validate Board move</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              The Orchestrator will validate this move before the Card stage or Handoff is saved.
+            </p>
+            <label className="mt-4 block text-sm font-medium" htmlFor="board-target-role">Target Role</label>
+            {roles.length > 0 ? (
+              <select
+                id="board-target-role"
+                aria-label="Target Role"
+                value={selectedRoleId}
+                onChange={(event) => setSelectedRoleId(event.target.value)}
+                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                {roles.map((role) => <option key={role.id} value={role.id}>{role.displayName}</option>)}
+              </select>
+            ) : (
+              <p className="mt-1 text-sm text-destructive">No configured Roles are available.</p>
+            )}
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setPendingMove(null)} className="rounded-md border border-border px-3 py-2 text-sm">Cancel</button>
+              <button
+                type="button"
+                disabled={!selectedRoleId}
+                onClick={() => {
+                  if (selectedRoleId) onMoveTask(pendingMove.taskId, pendingMove.targetStage, selectedRoleId);
+                  setPendingMove(null);
+                }}
+                className="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Validate move
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {/* Drag overlay */}
       <DragOverlay>

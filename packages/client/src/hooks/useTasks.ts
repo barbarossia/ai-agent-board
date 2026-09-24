@@ -66,11 +66,11 @@ export function useTasks(projectId = 'default') {
     }
   }, []);
 
-  const moveTask = useCallback(async (taskId: string, targetStage: BoardStageId) => {
+  const moveTask = useCallback(async (taskId: string, targetStage: BoardStageId, targetRoleId: string) => {
     const task = tasks.find((item) => item.id === taskId);
     if (!task?.boardStage || !BOARD_STAGE_TRANSITIONS[task.boardStage]?.includes(targetStage)) return;
     try {
-      const updated = await api.moveCard(taskId, targetStage);
+      const updated = await api.moveCard(taskId, targetStage, targetRoleId);
       setTasks((prev) => prev.map((item) => (item.id === taskId ? updated : item)));
     } catch (err) {
       const error = err as Error;

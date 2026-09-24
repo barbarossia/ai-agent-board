@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
-import type { Task, AgentType, Priority, ColumnId, BoardStageId, Project } from '@/types';
+import type { Task, AgentType, Priority, ColumnId, BoardStageId, Project, RoleConfig } from '@/types';
 import { useTheme } from '@/hooks/useTheme';
 import { useTasks } from '@/hooks/useTasks';
 import { useProjects } from '@/hooks/useProjects';
@@ -46,12 +46,14 @@ function BoardPage({
   toggleTheme,
   onBackToProjects,
   initialTaskId,
+  roles,
 }: {
   project: Project;
   theme: 'dark' | 'light';
   toggleTheme: () => void;
   onBackToProjects: () => void;
   initialTaskId?: string;
+  roles: RoleConfig[];
 }) {
   const lockedRepoPath = project.repoPath;
   const projectDefaults = {
@@ -401,6 +403,7 @@ function BoardPage({
         <Board
           tasks={filteredTasks}
           groups={groups}
+          roles={roles}
           getTasksByStage={getFilteredTasksByStage}
           onMoveTask={moveTask}
           onCompleteTask={(id) => { void completeTask(id); }}
@@ -611,6 +614,7 @@ export function App() {
   return (
     <BoardPage
       project={selectedProject}
+      roles={settings?.roles ?? []}
       theme={theme}
       toggleTheme={toggleTheme}
       onBackToProjects={() => navigate('/projects')}

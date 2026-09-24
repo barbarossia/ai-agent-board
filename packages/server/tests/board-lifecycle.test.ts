@@ -6,7 +6,10 @@ import Database from 'better-sqlite3';
 import { createHandoff, mapLegacyColumnToBoard } from '@ai-agent-board/shared/constants.js';
 import { migrateSqliteDatabase } from '../src/db.js';
 import { SqliteTaskRepository } from '../src/repositories/sqlite.js';
+import { SqliteTaskGroupRepository } from '../src/repositories/sqlite-groups.js';
+import { PostgresTaskGroupRepository } from '../src/repositories/postgres-groups.js';
 import { createTaskRouter } from '../src/routes/tasks.js';
+import { getConfig } from '../src/config.js';
 import type { Project, Task } from '../src/types.js';
 import type { ProjectRepository } from '../src/repositories/project-types.js';
 import type { AgentManager } from '../src/services/agent-manager.js';
@@ -77,6 +80,44 @@ test('SQLite Board transition appends an immutable Handoff and stage audit atomi
   }
 });
 
+test('SQLite TaskGroup children inherit the mapped Board stage and lifecycle', async () => {
+  const db = new Database(':memory:');
+  try {
+    migrateSqliteDatabase(db);
+    const groups = new SqliteTaskGroupRepository(db);
+    const created = await groups.create({
+      id: 'group-1', projectId: 'default', title: 'Group', priority: 'medium', columnId: 'backlog',
+      maxConcurrency: 1, createdAt: 3, archived: false,
+    }, [{ id: 'group-child-1', title: 'Child', description: '', priority: 'medium' }]);
+    assert.equal(created.children[0].boardStage, 'draft');
+    assert.equal(created.children[0].lifecycleState, 'Draft');
+    const persisted = await groups.getChildTasks('group-1');
+    assert.equal(persisted[0].boardStage, 'draft');
+    assert.equal(persisted[0].lifecycleState, 'Draft');
+  } finally {
+    db.close();
+  }
+});
+
+test('PostgreSQL TaskGroup child insert includes mapped Board fields', async () => {
+  const statements: Array<{ sql: string; values?: unknown[] }> = [];
+  const client = {
+    query: async (sql: string, values?: unknown[]) => { statements.push({ sql, values }); return { rows: [], rowCount: 1 }; },
+    release: () => undefined,
+  };
+  const repo = new PostgresTaskGroupRepository({ connect: async () => client } as never);
+  const created = await repo.create({
+    id: 'pg-group', projectId: 'default', title: 'Group', priority: 'medium', columnId: 'in-progress',
+    maxConcurrency: 1, createdAt: 4, archived: false,
+  }, [{ id: 'pg-child', title: 'Child', description: '', priority: 'medium' }]);
+  const childInsert = statements.find(({ sql }) => sql.includes('INSERT INTO tasks'));
+  assert.match(childInsert?.sql ?? '', /board_stage, lifecycle_state/);
+  assert.equal(childInsert?.values?.[6], 'implement');
+  assert.equal(childInsert?.values?.[7], 'Active');
+  assert.equal(created.children[0].boardStage, 'implement');
+  assert.equal(created.children[0].lifecycleState, 'Active');
+});
+
 test('Board API rejects invalid stage commands and requires explicit Knowledge completion', async () => {
   const db = new Database(':memory:');
   try {
@@ -122,6 +163,74 @@ test('Board API rejects invalid stage commands and requires explicit Knowledge c
       });
       assert.equal(confirmed.status, 200);
       assert.equal((await confirmed.json() as Task).lifecycleState, 'Done');
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
+    }
+  } finally {
+    db.close();
+  }
+});
+
+test('Board API commits stage and selected Role Handoff only after Orchestrator approval', async () => {
+  const db = new Database(':memory:');
+  try {
+    migrateSqliteDatabase(db);
+    const repo = new SqliteTaskRepository(db);
+    await repo.create(task('rejected-card', 'backlog', 'draft', 'Draft'));
+    await repo.create(task('review-card', 'in-progress', 'implement', 'Active'));
+    let validationMarker = 'BOARD_MOVE_VALIDATION: REJECTED';
+    let validationStarts = 0;
+    const config = getConfig();
+    const roles = config.roles;
+    const orchestrator = roles.find((role) => role.id === 'orchestrator');
+    const reviewer = roles.find((role) => role.id === 'reviewer');
+    assert(orchestrator && reviewer);
+    const agents = {
+      getAvailableAgents: () => config.providers.map((provider) => ({ name: provider.id, displayName: provider.displayName, available: provider.enabled })),
+      isRunning: () => false,
+      startAgent: (_task: Task, onStatusChange: (status: Task['agentStatus']) => void | Promise<void>) => {
+        validationStarts++;
+        const event = { id: `validation-${validationStarts}`, taskId: _task.id, type: 'complete', content: validationMarker,
+          timestamp: Date.now(), metadata: { finalOutput: true } } as const;
+        void repo.insertEvent(event).then(() => onStatusChange('complete'));
+      },
+    } as unknown as AgentManager;
+    const project: Project = { id: 'default', name: 'Default', aliases: [], isDefault: true, createdAt: 1, updatedAt: 1 };
+    const projects = {
+      getById: async (id: string) => id === project.id ? project : undefined,
+      getDefault: async () => project,
+      resolve: async () => [],
+    } as unknown as ProjectRepository;
+    const app = express();
+    app.use(express.json());
+    app.use('/api/tasks', createTaskRouter(repo, agents, projects));
+    const server = createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert(address && typeof address === 'object');
+    const base = `http://127.0.0.1:${address.port}/api/tasks`;
+    try {
+      const rejected = await fetch(`${base}/rejected-card/board-stage`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetStage: 'inbox', targetRoleId: orchestrator.id }),
+      });
+      assert.equal(rejected.status, 409);
+      assert.equal((await repo.getById('rejected-card'))?.boardStage, 'draft');
+      assert.equal((await repo.getById('rejected-card'))?.lifecycleState, 'Draft');
+      assert.equal((await repo.getHandoffs('rejected-card')).length, 0);
+
+      validationMarker = 'BOARD_MOVE_VALIDATION: APPROVED';
+      const accepted = await fetch(`${base}/review-card/board-stage`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetStage: 'review', targetRoleId: reviewer.id }),
+      });
+      assert.equal(accepted.status, 200);
+      assert.equal((await accepted.json() as Task).boardStage, 'review');
+      const handoffs = await repo.getHandoffs('review-card');
+      assert.equal(handoffs.length, 1);
+      assert.equal(handoffs[0].handoff.targetRoleId, reviewer.id);
+      assert.equal(handoffs[0].targetStage, 'review');
+      assert.equal(validationStarts, 2);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
     }
