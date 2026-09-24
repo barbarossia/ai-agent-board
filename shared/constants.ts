@@ -6,6 +6,9 @@ import type {
   CreateSessionInput, Session, SessionContractError, SessionContractResult,
   SessionRecentResult, SessionResultInput, SessionState, SessionStateAction,
   SessionStateResult, SessionStateTransition, TaskSessionAssociation,
+  WaitingContext, WaitingContextError, WaitingContextResult, WaitingReason,
+  Handoff, HandoffContractError, HandoffContractResult,
+  HandoffOwner, HandoffSessionReferenceReason, TaskHandoffAssociation,
 } from './types.js';
 
 export const VALID_PRIORITIES: readonly Priority[] = ['low', 'medium', 'high', 'critical'] as const;
@@ -112,6 +115,45 @@ export function transitionTaskLifecycle(
 }
 
 export const VALID_SESSION_STATES: readonly SessionState[] = ['Ready', 'Running', 'Waiting', 'Completed', 'Failed'] as const;
+
+export const VALID_WAITING_REASONS: readonly WaitingReason[] = ['human_input', 'local_action', 'approval', 'agent_wait'] as const;
+
+export function isValidWaitingReason(value: unknown): value is WaitingReason {
+  return typeof value === 'string' && (VALID_WAITING_REASONS as readonly string[]).includes(value);
+}
+
+/** The first three Waiting reasons need a Human action; agent_wait is ordinary Agent progress. */
+export function requiresHumanAction(reason: unknown): boolean {
+  return reason === 'human_input' || reason === 'local_action' || reason === 'approval';
+}
+
+export function validateWaitingContext(input: unknown): WaitingContextResult<WaitingContext> {
+  if (!isRoleObject(input)) {
+    return { ok: false, errors: [{ code: 'invalid_type', path: '', message: 'Expected a Waiting context object.' }] };
+  }
+  const errors: WaitingContextError[] = [];
+  for (const key of Object.keys(input)) {
+    if (!['reason', 'description', 'startedAt'].includes(key)) {
+      errors.push({ code: 'unknown_field', path: key, message: 'Field is not part of the safe Waiting display contract.' });
+    }
+  }
+  if (!Object.hasOwn(input, 'reason')) errors.push({ code: 'required', path: 'reason', message: 'Waiting reason is required.' });
+  else if (!isValidWaitingReason(input.reason)) errors.push({ code: 'invalid_type', path: 'reason', message: 'Expected a supported Waiting reason.' });
+  if (!Object.hasOwn(input, 'description')) errors.push({ code: 'required', path: 'description', message: 'Safe display description is required.' });
+  else if (typeof input.description !== 'string') errors.push({ code: 'invalid_type', path: 'description', message: 'Expected a string.' });
+  else if (!input.description.trim()) errors.push({ code: 'blank', path: 'description', message: 'Description must not be blank.' });
+  if (!Object.hasOwn(input, 'startedAt')) errors.push({ code: 'required', path: 'startedAt', message: 'Waiting start timestamp is required.' });
+  else if (!isTimestamp(input.startedAt)) errors.push({ code: 'invalid_timestamp', path: 'startedAt', message: 'Expected a nonnegative integer timestamp.' });
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    value: {
+      reason: input.reason as WaitingReason,
+      description: (input.description as string).trim(),
+      startedAt: input.startedAt as number,
+    },
+  };
+}
 
 const sessionTransition = (
   from: SessionState,
@@ -328,6 +370,7 @@ export function createSession(
     value: {
       ...result.value,
       state: 'Ready',
+      waitingContext: null,
       updatedAt: result.value.createdAt,
       startedAt: null,
       endedAt: null,
@@ -344,20 +387,56 @@ export function createTaskSessionAssociation(taskId: unknown): SessionContractRe
 }
 
 /** Transition a full Session and maintain deterministic timestamps without mutating the input. */
-export function transitionSession(session: Session, to: unknown, at: unknown): SessionContractResult<Session> {
+export function transitionSession(
+  session: Session,
+  to: unknown,
+  at: unknown,
+  options: { waitingContext?: unknown } = {},
+): SessionContractResult<Session> {
   if (!isTimestamp(at) || at < session.updatedAt) return sessionError('invalid_transition', 'at', 'Transition timestamp must be a nondecreasing integer.');
   const result = getSessionStateTransition(session.state, to);
   if (!result.ok) {
     const code = result.error.code === 'terminal_state_immutable' ? 'terminal_state_immutable' : 'invalid_transition';
     return sessionError(code, 'state', result.error.message);
   }
-  if (result.transition.action === 'noop') return { ok: true, value: { ...session } };
+  const currentWaitingContext = session.waitingContext ?? null;
+  let nextWaitingContext: WaitingContext | null = null;
+  if (session.state === 'Waiting') {
+    const current = validateWaitingContext(currentWaitingContext);
+    if (!current.ok || current.value.startedAt > session.updatedAt) {
+      return sessionError('invalid_waiting_context', 'waitingContext', 'A Waiting Session must have a valid context no later than its last update.');
+    }
+  }
+  if (result.state === 'Waiting') {
+    if (options.waitingContext === undefined) {
+      if (session.state !== 'Waiting') return sessionError('required_waiting_context', 'waitingContext', 'Entering Waiting requires a valid Waiting context.');
+      nextWaitingContext = currentWaitingContext;
+    } else {
+      const waiting = validateWaitingContext(options.waitingContext);
+      if (!waiting.ok) return sessionError('invalid_waiting_context', `waitingContext.${waiting.errors[0]?.path ?? ''}`.replace(/\.$/, ''), waiting.errors[0]?.message ?? 'Invalid Waiting context.');
+      if (waiting.value.startedAt > at) return sessionError('invalid_waiting_context', 'waitingContext.startedAt', 'Waiting start time cannot be later than the transition.');
+      nextWaitingContext = waiting.value;
+    }
+  } else if (options.waitingContext !== undefined) {
+    return sessionError('forbidden_waiting_context', 'waitingContext', 'Waiting context is only valid when the target state is Waiting.');
+  }
+  if (result.transition.action === 'noop') {
+    return {
+      ok: true,
+      value: {
+        ...session,
+        waitingContext: nextWaitingContext,
+        updatedAt: result.state === 'Waiting' && options.waitingContext !== undefined ? at : session.updatedAt,
+      },
+    };
+  }
   const terminal = result.state === 'Completed' || result.state === 'Failed';
   return {
     ok: true,
     value: {
       ...session,
       state: result.state,
+      waitingContext: nextWaitingContext,
       updatedAt: at,
       startedAt: result.state === 'Running' ? session.startedAt ?? at : session.startedAt,
       endedAt: terminal ? at : null,
@@ -428,6 +507,124 @@ export function recordSessionResult(
   const result = createSessionResult(session, input);
   if (!result.ok) return result;
   return { ok: true, value: { ...association, recentResult: result.value } };
+}
+
+function handoffError(code: HandoffContractError['code'], path: string, message: string): HandoffContractResult<never> {
+  return { ok: false, errors: [{ code, path, message }] };
+}
+
+function isOpaqueId(value: unknown): value is string {
+  return isNonblankString(value) && value === value.trim();
+}
+
+const VALID_HANDOFF_SESSION_REFERENCE_REASONS: readonly HandoffSessionReferenceReason[] = ['session_not_created', 'not_applicable'] as const;
+
+function isValidHandoffSessionReferenceReason(value: unknown): value is HandoffSessionReferenceReason {
+  return typeof value === 'string' && (VALID_HANDOFF_SESSION_REFERENCE_REASONS as readonly string[]).includes(value);
+}
+
+/** Create an empty append head for one resolved Task/Card pair. */
+export function createTaskHandoffAssociation(owner: HandoffOwner): HandoffContractResult<TaskHandoffAssociation> {
+  if (!isRoleObject(owner)) return handoffError('invalid_type', '', 'Expected a Task/Card owner object.');
+  if (!isOpaqueId(owner.taskId)) return handoffError('blank', 'taskId', 'Task ID must be a nonblank opaque identifier.');
+  if (!isOpaqueId(owner.cardId)) return handoffError('blank', 'cardId', 'Card ID must be a nonblank opaque identifier.');
+  return { ok: true, value: { taskId: owner.taskId, cardId: owner.cardId, latestHandoffId: null } };
+}
+
+/** Validate and materialize one immutable Handoff reference; storage still owns uniqueness and atomicity. */
+export function createHandoff(
+  owner: HandoffOwner,
+  input: unknown,
+  roleIds: Iterable<string>,
+  relatedSession: Session | null = null,
+): HandoffContractResult<Handoff> {
+  if (!isRoleObject(owner) || !isOpaqueId(owner.taskId) || !isOpaqueId(owner.cardId)) {
+    return handoffError('invalid_type', 'owner', 'Expected a resolved Task and corresponding Card identity.');
+  }
+  if (!isRoleObject(input)) return handoffError('invalid_type', '', 'Expected a Handoff input object.');
+  const known = ['id', 'taskId', 'cardId', 'sourceRoleId', 'targetRoleId', 'sessionId', 'sessionReferenceReason', 'createdAt', 'previousHandoffId'];
+  for (const key of Object.keys(input)) {
+    if (!known.includes(key)) return handoffError('unknown_field', key, 'Field is not part of the minimum Handoff reference.');
+  }
+  for (const key of ['id', 'taskId', 'cardId', 'sourceRoleId', 'targetRoleId']) {
+    if (!Object.hasOwn(input, key)) return handoffError('required', key, 'Field is required.');
+    if (!isOpaqueId(input[key])) return handoffError('blank', key, 'Expected a nonblank opaque identifier without surrounding whitespace.');
+  }
+  if (!Object.hasOwn(input, 'createdAt')) return handoffError('required', 'createdAt', 'Creation timestamp is required.');
+  if (!isTimestamp(input.createdAt)) return handoffError('invalid_timestamp', 'createdAt', 'Expected a nonnegative integer timestamp.');
+  if (input.taskId !== owner.taskId) return handoffError('task_mismatch', 'taskId', 'Handoff Task does not match the resolved owner.');
+  if (input.cardId !== owner.cardId) return handoffError('card_mismatch', 'cardId', 'Handoff Card does not correspond to the resolved Task owner.');
+  const availableRoles = new Set(roleIds);
+  for (const key of ['sourceRoleId', 'targetRoleId']) {
+    if (!availableRoles.has(input[key] as string)) return handoffError('invalid_role_reference', key, 'Role reference is unavailable.');
+  }
+
+  if (Object.hasOwn(input, 'sessionId') && input.sessionId === undefined) return handoffError('invalid_type', 'sessionId', 'Session ID must be null or a nonblank opaque identifier.');
+  const sessionId = input.sessionId === undefined ? null : input.sessionId;
+  if (sessionId !== null && !isOpaqueId(sessionId)) return handoffError('blank', 'sessionId', 'Session ID must be null or a nonblank opaque identifier.');
+  if (Object.hasOwn(input, 'sessionReferenceReason') && input.sessionReferenceReason === undefined) {
+    return handoffError('invalid_type', 'sessionReferenceReason', 'Reference reason must be null or a supported reason.');
+  }
+  const reason = input.sessionReferenceReason === undefined ? null : input.sessionReferenceReason;
+  if (sessionId === null) {
+    if (reason === null) {
+      return handoffError('session_reference_reason_required', 'sessionReferenceReason', 'A null Session reference requires an explicit reason.');
+    }
+    if (!isValidHandoffSessionReferenceReason(reason)) return handoffError('invalid_type', 'sessionReferenceReason', 'Expected a supported null-reference reason.');
+  } else {
+    if (reason !== null) {
+      if (!isValidHandoffSessionReferenceReason(reason)) return handoffError('invalid_type', 'sessionReferenceReason', 'Expected a supported null-reference reason or null.');
+      return handoffError('unexpected_session_reference_reason', 'sessionReferenceReason', 'A present Session reference cannot carry a null-reference reason.');
+    }
+    if (!relatedSession || relatedSession.id !== sessionId || relatedSession.taskId !== owner.taskId) {
+      return handoffError('invalid_session_reference', 'sessionId', 'Session must exist and belong to the same Task as the Handoff.');
+    }
+  }
+
+  const previousHandoffId = input.previousHandoffId === undefined ? null : input.previousHandoffId;
+  if (Object.hasOwn(input, 'previousHandoffId') && input.previousHandoffId === undefined) {
+    return handoffError('invalid_type', 'previousHandoffId', 'Previous Handoff ID must be null or a nonblank opaque identifier.');
+  }
+  if (previousHandoffId !== null && !isOpaqueId(previousHandoffId)) {
+    return handoffError('blank', 'previousHandoffId', 'Previous Handoff ID must be null or a nonblank opaque identifier.');
+  }
+  return {
+    ok: true,
+    value: Object.freeze({
+      id: input.id as string,
+      taskId: input.taskId as string,
+      cardId: input.cardId as string,
+      sourceRoleId: input.sourceRoleId as string,
+      targetRoleId: input.targetRoleId as string,
+      sessionId,
+      sessionReferenceReason: reason as HandoffSessionReferenceReason | null,
+      createdAt: input.createdAt,
+      previousHandoffId,
+    }),
+  };
+}
+
+/** Append by advancing only the Task/Card head; stale or cross-owner writers cannot overwrite it. */
+export function appendHandoff(
+  association: TaskHandoffAssociation,
+  owner: HandoffOwner,
+  handoff: Handoff,
+  expectedLatestHandoffId: string | null,
+  knownHandoffIds: Iterable<string> = [],
+): HandoffContractResult<TaskHandoffAssociation> {
+  if (association.taskId !== owner.taskId || handoff.taskId !== owner.taskId) {
+    return handoffError('task_mismatch', 'taskId', 'Association and Handoff must belong to the resolved Task.');
+  }
+  if (association.cardId !== owner.cardId || handoff.cardId !== owner.cardId) {
+    return handoffError('card_mismatch', 'cardId', 'Association and Handoff must belong to the corresponding Card.');
+  }
+  if (new Set(knownHandoffIds).has(handoff.id) || association.latestHandoffId === handoff.id) {
+    return handoffError('duplicate_handoff', 'id', 'Handoff ID has already been appended.');
+  }
+  if (association.latestHandoffId !== expectedLatestHandoffId || handoff.previousHandoffId !== expectedLatestHandoffId) {
+    return handoffError('stale_handoff_head', 'previousHandoffId', 'Handoff append was based on a stale or mismatched current head.');
+  }
+  return { ok: true, value: { ...association, latestHandoffId: handoff.id } };
 }
 
 /** Allowed column transitions. Key = current column, value = columns you can move to. */

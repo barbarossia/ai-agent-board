@@ -27,6 +27,26 @@ export type SessionStateResult =
 
 export type SessionResultOutcome = 'success' | 'failure';
 
+/** Stable reason codes for a Session in Waiting; these are display/lifecycle metadata, not UI actions. */
+export type WaitingReason = 'human_input' | 'local_action' | 'approval' | 'agent_wait';
+
+/** Safe-to-display waiting summary. Never put submitted secrets or raw input in this object. */
+export interface WaitingContext {
+  reason: WaitingReason;
+  description: string;
+  startedAt: number;
+}
+
+export interface WaitingContextError {
+  code: 'invalid_type' | 'required' | 'blank' | 'invalid_timestamp' | 'unknown_field';
+  path: string;
+  message: string;
+}
+
+export type WaitingContextResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; errors: WaitingContextError[] };
+
 export interface SessionRecentResult {
   sessionId: string;
   outcome: SessionResultOutcome;
@@ -48,6 +68,8 @@ export interface Session {
   id: string;
   taskId: string;
   state: SessionState;
+  /** Present exactly while Waiting; cleared on every transition out of Waiting. */
+  waitingContext: WaitingContext | null;
   createdAt: number;
   updatedAt: number;
   startedAt: number | null;
@@ -90,7 +112,10 @@ export interface SessionContractError {
     | 'terminal_state_immutable'
     | 'invalid_result'
     | 'result_already_recorded'
-    | 'stale_session_result';
+    | 'stale_session_result'
+    | 'required_waiting_context'
+    | 'invalid_waiting_context'
+    | 'forbidden_waiting_context';
   path: string;
   message: string;
 }
@@ -98,6 +123,68 @@ export interface SessionContractError {
 export type SessionContractResult<T> =
   | { ok: true; value: T }
   | { ok: false; errors: SessionContractError[] };
+
+/** A resolved Task/Card ownership pair at the boundary that creates a Handoff. */
+export interface HandoffOwner {
+  taskId: string;
+  cardId: string;
+}
+
+export type HandoffSessionReferenceReason = 'session_not_created' | 'not_applicable';
+
+/** Immutable append-only transfer reference. It deliberately does not contain artifacts or payloads. */
+export interface Handoff {
+  readonly id: string;
+  readonly taskId: string;
+  readonly cardId: string;
+  readonly sourceRoleId: string;
+  readonly targetRoleId: string;
+  readonly sessionId: string | null;
+  readonly sessionReferenceReason: HandoffSessionReferenceReason | null;
+  readonly createdAt: number;
+  /** Candidate chain pointer for Phase 6; this phase defines no chain ordering algorithm. */
+  readonly previousHandoffId: string | null;
+}
+
+export interface CreateHandoffInput {
+  id: string;
+  taskId: string;
+  cardId: string;
+  sourceRoleId: string;
+  targetRoleId: string;
+  sessionId?: string | null;
+  sessionReferenceReason?: HandoffSessionReferenceReason | null;
+  createdAt: number;
+  previousHandoffId?: string | null;
+}
+
+export interface TaskHandoffAssociation extends HandoffOwner {
+  /** Null before the first Handoff append. */
+  latestHandoffId: string | null;
+}
+
+export interface HandoffContractError {
+  code:
+    | 'invalid_type'
+    | 'required'
+    | 'blank'
+    | 'invalid_timestamp'
+    | 'unknown_field'
+    | 'task_mismatch'
+    | 'card_mismatch'
+    | 'invalid_role_reference'
+    | 'invalid_session_reference'
+    | 'session_reference_reason_required'
+    | 'unexpected_session_reference_reason'
+    | 'stale_handoff_head'
+    | 'duplicate_handoff';
+  path: string;
+  message: string;
+}
+
+export type HandoffContractResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; errors: HandoffContractError[] };
 
 /** New domain lifecycle, serialized with exact title case per Phase 2.1. */
 export type TaskLifecycleState = 'Draft' | 'Inbox' | 'Active' | 'Done';
@@ -226,6 +313,8 @@ export interface Task {
   timeoutMinutes?: number | null;
   /** Additive Phase 2.4 association; legacy Task fields remain authoritative until an adapter is defined. */
   session?: TaskSessionAssociation;
+  /** Additive Handoff append head; absence means the legacy Task has no Handoff reference. */
+  handoff?: TaskHandoffAssociation;
 }
 
 /** A first-class link between two durable Board work items. */
