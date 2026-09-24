@@ -6,6 +6,7 @@ import type {
   AgentInfo,
   AgentType,
   ColumnId,
+  BoardStageId,
   Priority,
   WSMessage,
   Project,
@@ -121,6 +122,12 @@ export const api = {
 
   updateTask: (id: string, data: Partial<Task>) =>
     request<Task>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+
+  moveCard: (id: string, targetStage: BoardStageId, targetRoleId: string) =>
+    request<Task>(`/tasks/${id}/board-stage`, { method: 'POST', body: JSON.stringify({ targetStage, targetRoleId }) }),
+
+  completeTask: (id: string) =>
+    request<Task>(`/tasks/${id}/complete`, { method: 'POST', body: JSON.stringify({ completionConfirmed: true }) }),
 
   deleteTask: (id: string) =>
     request<void>(`/tasks/${id}`, { method: 'DELETE' }),

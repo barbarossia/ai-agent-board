@@ -5,7 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import type { Project, Task, TaskGroup } from '../types.js';
-import { isValidPriority, isValidColumnId, isValidAgentType, isValidAgentTimeoutMinutes, VALID_AGENT_TYPES, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MIN_AGENT_TIMEOUT_MINUTES, MAX_AGENT_TIMEOUT_MINUTES } from '@ai-agent-board/shared/constants.js';
+import { isValidPriority, isValidColumnId, isValidAgentType, isValidAgentTimeoutMinutes, mapLegacyColumnToBoard, VALID_AGENT_TYPES, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MIN_AGENT_TIMEOUT_MINUTES, MAX_AGENT_TIMEOUT_MINUTES } from '@ai-agent-board/shared/constants.js';
 import { errorMessage } from '../utils.js';
 import { getCloneRoot } from '../config.js';
 import type { TaskRepository } from '../repositories/types.js';
@@ -525,6 +525,7 @@ export function validateTaskFields(body: Record<string, any>): string | null {
 
 export function buildTask(body: Record<string, any>): Task {
   const { title, description, priority, columnId, agentType, repoPath, branchName, baseBranch, useWorktree, projectId, timeoutMinutes } = body;
+  const mappedLifecycle = mapLegacyColumnToBoard(columnId || 'backlog');
   return {
     id: uuid(),
     projectId: typeof projectId === 'string' && projectId ? projectId : 'default',
@@ -532,6 +533,9 @@ export function buildTask(body: Record<string, any>): Task {
     description: description || '',
     priority: priority || 'medium',
     columnId: columnId || 'backlog',
+    legacyColumnId: mappedLifecycle ? undefined : (columnId || 'backlog'),
+    boardStage: mappedLifecycle?.boardStage ?? null,
+    lifecycleState: mappedLifecycle?.lifecycleState ?? null,
     agentStatus: 'idle',
     agentType: agentType || 'copilot',
     createdAt: Date.now(),

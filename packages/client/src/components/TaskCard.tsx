@@ -48,9 +48,10 @@ interface TaskCardProps {
   onArchive?: (task: Task) => void;
   onUnarchive?: (task: Task) => void;
   onRetry?: (task: Task) => void;
+  onComplete?: (taskId: string) => void;
 }
 
-function TaskCardComponent({ task, onClick, onEdit, onDelete, onArchive, onUnarchive, onRetry }: TaskCardProps) {
+function TaskCardComponent({ task, onClick, onEdit, onDelete, onArchive, onUnarchive, onRetry, onComplete }: TaskCardProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
       id: task.id,
@@ -111,11 +112,21 @@ function TaskCardComponent({ task, onClick, onEdit, onDelete, onArchive, onUnarc
     >
 
       {/* Action buttons — top right, visible on hover */}
-      {(onEdit || onDelete || onArchive || onUnarchive || onRetry) && (
+      {(onEdit || onDelete || onArchive || onUnarchive || onRetry || onComplete) && (
         <div
           className="relative mb-1 flex items-center justify-end gap-0.5 opacity-100 transition-opacity lg:absolute lg:right-2 lg:top-2 lg:mb-0 lg:opacity-0 lg:group-hover:opacity-100"
           onPointerDown={(e) => e.stopPropagation()}
         >
+          {onComplete && !task.archived && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onComplete(task.id); }}
+              className="flex h-11 w-11 items-center justify-center rounded-md text-emerald-500 transition-colors hover:bg-accent lg:h-6 lg:w-6"
+              aria-label="Confirm task completion"
+              title="Human confirmation required to mark this Task Done"
+            >
+              <CheckCircle2 className="h-3 w-3" />
+            </button>
+          )}
           {onRetry && task.agentStatus === 'failed' && !task.archived && (
             <button
               onClick={(e) => {
@@ -140,7 +151,7 @@ function TaskCardComponent({ task, onClick, onEdit, onDelete, onArchive, onUnarc
               <Pencil className="h-3 w-3" />
             </button>
           )}
-          {onArchive && (task.columnId === 'done' || task.agentStatus === 'failed') && !task.archived && (
+          {onArchive && (task.lifecycleState === 'Done' || task.columnId === 'done' || task.agentStatus === 'failed') && !task.archived && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -197,6 +208,14 @@ function TaskCardComponent({ task, onClick, onEdit, onDelete, onArchive, onUnarc
             {task.agentType && task.columnId !== 'backlog' && (
               <span className="inline-flex items-center gap-0.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                 {agentDisplay?.emoji} {agentDisplay?.label}
+              </span>
+            )}
+            {task.boardStage === 'inbox' && (
+              <span className="text-[10px] text-muted-foreground">Orchestrator {agentStatus.label.toLowerCase()}</span>
+            )}
+            {task.handoff?.latestHandoffId && (
+              <span className="max-w-24 truncate text-[10px] text-muted-foreground" title={`Latest Handoff ${task.handoff.latestHandoffId}`}>
+                Handoff {task.handoff.latestHandoffId.slice(0, 8)}
               </span>
             )}
           </div>

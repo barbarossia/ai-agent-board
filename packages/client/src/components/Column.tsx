@@ -8,6 +8,9 @@ import {
   CheckCircle2,
   Plus,
   Archive,
+  Search,
+  Code2,
+  BookOpen,
 } from 'lucide-react';
 import type { Column as ColumnType, Task } from '@/types';
 import { TaskCard } from './TaskCard';
@@ -19,6 +22,9 @@ const iconMap: Record<string, React.ElementType> = {
   eye: Eye,
   'check-circle': CheckCircle2,
   archive: Archive,
+  search: Search,
+  code: Code2,
+  book: BookOpen,
 };
 
 interface ColumnProps {
@@ -30,11 +36,12 @@ interface ColumnProps {
   onArchiveTask?: (task: Task) => void;
   onUnarchiveTask?: (task: Task) => void;
   onRetryTask?: (task: Task) => void;
+  onCompleteTask?: (taskId: string) => void;
   onAddTask?: () => void;
   extraContent?: React.ReactNode;
 }
 
-export function Column({ column, tasks, onTaskClick, onEditTask, onDeleteTask, onArchiveTask, onUnarchiveTask, onRetryTask, onAddTask, extraContent }: ColumnProps) {
+export function Column({ column, tasks, onTaskClick, onEditTask, onDeleteTask, onArchiveTask, onUnarchiveTask, onRetryTask, onCompleteTask, onAddTask, extraContent }: ColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: column.id });
   const Icon = iconMap[column.icon] || Inbox;
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -59,6 +66,8 @@ export function Column({ column, tasks, onTaskClick, onEditTask, onDeleteTask, o
       'bg-blue-500': 'bg-blue-500',
       'bg-amber-500': 'bg-amber-500',
       'bg-emerald-500': 'bg-emerald-500',
+      'bg-cyan-500': 'bg-cyan-500',
+      'bg-violet-500': 'bg-violet-500',
     };
     return map[column.color] || 'bg-zinc-400';
   }, [column.color]);
@@ -76,11 +85,11 @@ export function Column({ column, tasks, onTaskClick, onEditTask, onDeleteTask, o
             {tasks.length}
           </span>
         </div>
-        {column.id === 'backlog' && onAddTask && (
+      {column.id === 'draft' && onAddTask && (
           <motion.button
             whileTap={{ scale: 0.9 }}
             onClick={onAddTask}
-            aria-label="Add backlog task"
+            aria-label="Add Draft card"
             className="-my-2 flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:my-0 lg:h-6 lg:w-6"
           >
             <Plus className="h-4 w-4" />
@@ -107,11 +116,12 @@ export function Column({ column, tasks, onTaskClick, onEditTask, onDeleteTask, o
               key={task.id}
               task={task}
               onClick={() => onTaskClick(task)}
-              onEdit={onEditTask}
+              onEdit={task.boardStage === 'draft' ? onEditTask : undefined}
               onDelete={onDeleteTask}
               onArchive={onArchiveTask}
               onUnarchive={onUnarchiveTask}
               onRetry={onRetryTask}
+              onComplete={task.boardStage === 'knowledge' && task.lifecycleState === 'Active' ? onCompleteTask : undefined}
             />
           ))}
 
@@ -120,11 +130,13 @@ export function Column({ column, tasks, onTaskClick, onEditTask, onDeleteTask, o
               <div className="text-center">
                 <Icon className="mx-auto h-5 w-5 text-muted-foreground/30 lg:h-6 lg:w-6" />
                 <p className="mt-1 text-xs text-muted-foreground/50">
-                  {column.id === 'backlog' && <><span className="hidden lg:inline">Press N to create a task or G for a group</span><span className="lg:hidden">Add a task or group</span></>}
-                  {column.id === 'in-progress' && <><span className="hidden lg:inline">Drag tasks here to start AI agents</span><span className="lg:hidden">Drag tasks here</span></>}
-                  {column.id === 'review' && <><span className="hidden lg:inline">Completed tasks appear here for review</span><span className="lg:hidden">Completed tasks</span></>}
-                  {column.id === 'done' && <><span className="hidden lg:inline">Move reviewed tasks here when finished</span><span className="lg:hidden">Reviewed tasks</span></>}
-                  {!['backlog', 'in-progress', 'review', 'done'].includes(column.id) && 'No tasks'}
+                  {column.id === 'draft' && <><span className="hidden lg:inline">Create and edit cards before submitting to Inbox</span><span className="lg:hidden">Create a Draft card</span></>}
+                  {column.id === 'inbox' && <><span className="hidden lg:inline">Submit cards here for Orchestrator validation</span><span className="lg:hidden">Awaiting Orchestrator</span></>}
+                  {column.id === 'research' && 'No research handoffs yet'}
+                  {column.id === 'implement' && 'No implementation handoffs yet'}
+                  {column.id === 'review' && 'No cards awaiting review'}
+                  {column.id === 'knowledge' && 'No accepted knowledge yet'}
+                  {column.id === 'archived' && 'No archived tasks'}
                 </p>
               </div>
             </div>

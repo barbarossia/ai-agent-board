@@ -182,45 +182,45 @@ for (const vp of MOBILE_VIEWPORTS) {
       await client.detach();
     });
 
-    test('all four columns are reachable via the position affordance', async ({ page }) => {
+    test('all six columns are reachable via the position affordance', async ({ page }) => {
       const nav = page.locator('nav[aria-label="Board columns"]');
       await expect(nav).toBeVisible();
       const dots = nav.locator('button');
-      await expect(dots).toHaveCount(4);
-      for (let i = 0; i < 4; i++) {
+      await expect(dots).toHaveCount(6);
+      for (let i = 0; i < 6; i++) {
         const target = await dots.nth(i).boundingBox();
         expect(target!.width).toBeGreaterThanOrEqual(44);
         expect(target!.height).toBeGreaterThanOrEqual(44);
       }
 
-      const headings = ['Backlog', 'In Progress', 'Review', 'Done'];
-      for (let i = 3; i >= 0; i--) {
+      const headings = ['Draft', 'Inbox', 'Research', 'Implement', 'Review', 'Knowledge'];
+      for (let i = 5; i >= 0; i--) {
         await dots.nth(i).click();
         await expect(page.getByRole('heading', { name: headings[i], exact: true }))
           .toBeInViewport({ timeout: 5_000 });
       }
       // Position label reflects the first column after navigating back.
-      await expect(nav.getByText('1 of 4', { exact: true })).toBeVisible();
+      await expect(nav.getByText('1 of 6', { exact: true })).toBeVisible();
       // aria-current marks the active dot for assistive tech.
       await expect(nav.locator('button[aria-current="true"]')).toHaveCount(1);
     });
 
     test('empty column shows its empty state on the rail', async ({ page }) => {
-      // Filter to the fixture prefix so the Done column is deterministically empty.
+      // Filter to the fixture prefix so the Knowledge column is deterministically empty.
       await page.getByRole('button', { name: 'Open menu' }).click();
       // Two search inputs exist (hidden desktop + mobile menu) — use the visible one.
       await page.locator('input[aria-label="Search tasks"]:visible').fill(FIXTURE_PREFIX);
       await page.getByRole('button', { name: 'Close menu' }).click();
 
       const nav = page.locator('nav[aria-label="Board columns"]');
-      await nav.locator('button').nth(3).click();
-      await expect(page.getByRole('heading', { name: 'Done', exact: true })).toBeInViewport();
-      await expect(page.getByText('Reviewed tasks', { exact: true })).toBeVisible();
+      await nav.locator('button').nth(5).click();
+      await expect(page.getByRole('heading', { name: 'Knowledge', exact: true })).toBeInViewport();
+      await expect(page.getByText('No accepted knowledge yet', { exact: true })).toBeVisible();
     });
 
     test('cards keep native pan gestures (deliberate drag only)', async ({ page }) => {
       const card = page
-        .locator('[data-column="backlog"] .group')
+        .locator('[data-column="draft"] .group')
         .filter({ has: page.getByRole('heading', { name: LONG_TITLE }) });
       await card.scrollIntoViewIfNeeded();
       const touchAction = await card.evaluate((el) => getComputedStyle(el).touchAction);
@@ -231,7 +231,7 @@ for (const vp of MOBILE_VIEWPORTS) {
 
     test('card actions and filter chips expose 44px touch targets', async ({ page }) => {
       const card = page
-        .locator('[data-column="backlog"] .group')
+        .locator('[data-column="draft"] .group')
         .filter({ has: page.getByRole('heading', { name: LONG_TITLE }) });
       await card.scrollIntoViewIfNeeded();
       await expectTouchTarget(card.getByRole('button', { name: 'Edit task' }));
@@ -357,7 +357,7 @@ for (const vp of MOBILE_VIEWPORTS) {
 
       // Second column in view for the populated-board shot.
       await page.locator('nav[aria-label="Board columns"] button').nth(1).click();
-      await expect(page.getByRole('heading', { name: 'In Progress', exact: true })).toBeInViewport();
+      await expect(page.getByRole('heading', { name: 'Implement', exact: true })).toBeInViewport();
       await page.screenshot({ path: path.join(SCREENSHOT_DIR, `${vp.name}-board-in-progress.png`) });
 
       await openTaskDrawer(page, IN_PROGRESS_TITLE);
@@ -431,8 +431,8 @@ test.describe('Desktop 1440x900', () => {
   });
 
   test('multi-column board with all columns visible and side drawer', async ({ page }) => {
-    // All four columns fit side by side — no snap rail affordance.
-    for (const col of ['Backlog', 'In Progress', 'Review', 'Done']) {
+    // All six columns fit side by side — no snap rail affordance.
+    for (const col of ['Draft', 'Inbox', 'Research', 'Implement', 'Review', 'Knowledge']) {
       await expect(page.getByRole('heading', { name: col, exact: true })).toBeInViewport();
     }
     await expect(page.locator('nav[aria-label="Board columns"]')).toBeHidden();

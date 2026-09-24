@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { v4 as uuid } from 'uuid';
 import type { TaskGroup, Task, Priority, ColumnId, AgentType, AgentStatus } from '../types.js';
 import type { TaskGroupRepository } from './group-types.js';
+import { mapLegacyColumnToBoard } from '@ai-agent-board/shared/constants.js';
 
 interface GroupRow {
   id: string;
@@ -40,6 +41,8 @@ interface TaskRow {
   group_id: string | null;
   group_order: number | null;
   timeout_minutes: number | null;
+  board_stage: Task['boardStage'] | null;
+  lifecycle_state: Task['lifecycleState'] | null;
 }
 
 function rowToGroup(row: GroupRow): TaskGroup {
@@ -68,6 +71,8 @@ function rowToTask(row: TaskRow): Task {
     description: row.description,
     priority: row.priority,
     columnId: row.column_id,
+    boardStage: row.board_stage,
+    lifecycleState: row.lifecycle_state,
     agentStatus: row.agent_status,
     createdAt: row.created_at,
     startedAt: row.started_at ?? undefined,
@@ -111,10 +116,10 @@ export class SqliteTaskGroupRepository implements TaskGroupRepository {
           @max_concurrency, @created_at, @started_at, @completed_at, @archived)
       `),
       insertChild: db.prepare(`
-        INSERT INTO tasks (id, project_id, title, description, priority, column_id, agent_status, agent_type,
+        INSERT INTO tasks (id, project_id, title, description, priority, column_id, board_stage, lifecycle_state, agent_status, agent_type,
           created_at, repo_path, base_branch, use_worktree, branch_name, archived, group_id, group_order,
           started_at, completed_at, worktree_path)
-        VALUES (@id, @project_id, @title, @description, @priority, @column_id, @agent_status, @agent_type,
+        VALUES (@id, @project_id, @title, @description, @priority, @column_id, @board_stage, @lifecycle_state, @agent_status, @agent_type,
           @created_at, @repo_path, @base_branch, @use_worktree, @branch_name, 0, @group_id, @group_order,
           NULL, NULL, NULL)
       `),
@@ -166,6 +171,7 @@ export class SqliteTaskGroupRepository implements TaskGroupRepository {
       for (let i = 0; i < children.length; i++) {
         const child = children[i];
         const taskId = child.id || uuid();
+        const lifecycle = mapLegacyColumnToBoard(group.columnId);
         const task: Task = {
           id: taskId,
           projectId: group.projectId,
@@ -173,6 +179,8 @@ export class SqliteTaskGroupRepository implements TaskGroupRepository {
           description: child.description,
           priority: child.priority ?? group.priority,
           columnId: group.columnId,
+          boardStage: lifecycle?.boardStage ?? null,
+          lifecycleState: lifecycle?.lifecycleState ?? null,
           agentStatus: 'idle',
           createdAt: group.createdAt,
           repoPath: group.repoPath,
@@ -191,6 +199,8 @@ export class SqliteTaskGroupRepository implements TaskGroupRepository {
           description: task.description,
           priority: task.priority,
           column_id: task.columnId,
+          board_stage: task.boardStage,
+          lifecycle_state: task.lifecycleState,
           agent_status: task.agentStatus,
           agent_type: task.agentType ?? 'copilot',
           created_at: task.createdAt,

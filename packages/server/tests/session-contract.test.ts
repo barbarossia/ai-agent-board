@@ -11,6 +11,10 @@ import {
   transitionSession,
   transitionSessionState,
   VALID_SESSION_STATES,
+  VALID_WAITING_REASONS,
+  isValidWaitingReason,
+  requiresHumanAction,
+  validateWaitingContext,
   validateCreateSession,
 } from '@ai-agent-board/shared/constants.js';
 import type { Session, SessionContractResult, SessionState } from '@ai-agent-board/shared/types.js';
@@ -102,10 +106,14 @@ test('state transitions support start, wait, resume and terminal success/failure
   const running = value(transitionSession(ready, 'Running', 110));
   assert.equal(running.startedAt, 110);
   assert.equal(running.endedAt, null);
-  const waiting = value(transitionSession(running, 'Waiting', 120));
+  const waiting = value(transitionSession(running, 'Waiting', 120, {
+    waitingContext: { reason: 'human_input', description: 'Provide a non-sensitive answer.', startedAt: 120 },
+  }));
   assert.equal(waiting.updatedAt, 120);
+  assert.equal(waiting.waitingContext?.reason, 'human_input');
   const resumed = value(transitionSession(waiting, 'Running', 130));
   assert.equal(resumed.startedAt, 110);
+  assert.equal(resumed.waitingContext, null);
   const completed = value(transitionSession(resumed, 'Completed', 140));
   assert.equal(completed.endedAt, 140);
   assert.equal(completed.updatedAt, 140);
@@ -114,6 +122,40 @@ test('state transitions support start, wait, resume and terminal success/failure
   const failed = value(transitionSession(value(transitionSession(session('session-2'), 'Running', 110)), 'Failed', 120));
   assert.equal(failed.state, 'Failed');
   assert.equal(failed.endedAt, 120);
+});
+
+test('Waiting reasons are shared, serializable and derive Human action without adding a Task state', () => {
+  assert.deepEqual(VALID_WAITING_REASONS, ['human_input', 'local_action', 'approval', 'agent_wait']);
+  for (const reason of VALID_WAITING_REASONS) {
+    assert.equal(isValidWaitingReason(reason), true);
+    const parsed = value(validateWaitingContext({ reason, description: 'Safe display text', startedAt: 120 }));
+    assert.deepEqual(JSON.parse(JSON.stringify(parsed)), parsed);
+    assert.equal(requiresHumanAction(reason), reason !== 'agent_wait');
+  }
+  assert.equal(isValidWaitingReason('Cancelled'), false);
+  assert.equal(requiresHumanAction('agent_wait'), false);
+});
+
+test('Waiting requires valid context and clears it on exit; non-Waiting states reject context', () => {
+  const running = value(transitionSession(session('session-wait'), 'Running', 110));
+  rejects(transitionSession(running, 'Waiting', 120), 'required_waiting_context', 'waitingContext');
+  rejects(transitionSession(running, 'Waiting', 120, { waitingContext: { reason: 'approval' } }), 'invalid_waiting_context', 'waitingContext.description');
+  const secretField = validateWaitingContext({ reason: 'approval', description: 'Safe', startedAt: 1, rawInput: 'secret' });
+  assert.equal(secretField.ok, false);
+  if (!secretField.ok) assert.ok(secretField.errors.some(error => error.code === 'unknown_field' && error.path === 'rawInput'));
+  rejects(transitionSession(running, 'Running', 120, { waitingContext: { reason: 'approval', description: 'Review', startedAt: 120 } }), 'forbidden_waiting_context', 'waitingContext');
+
+  const waiting = value(transitionSession(running, 'Waiting', 120, {
+    waitingContext: { reason: 'approval', description: 'Approve this action.', startedAt: 120 },
+  }));
+  const same = value(transitionSession(waiting, 'Waiting', 125));
+  assert.deepEqual(same.waitingContext, waiting.waitingContext);
+  const updated = value(transitionSession(same, 'Waiting', 130, {
+    waitingContext: { reason: 'agent_wait', description: 'Agent is processing.', startedAt: 120 },
+  }));
+  assert.equal(updated.waitingContext?.reason, 'agent_wait');
+  assert.equal(updated.updatedAt, 130);
+  assert.equal(value(transitionSession(updated, 'Failed', 140)).waitingContext, null);
 });
 
 test('same-state requests are no-ops and invalid endpoints preserve stable from/to errors', () => {

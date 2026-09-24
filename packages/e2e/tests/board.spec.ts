@@ -3,7 +3,7 @@ import { API, fillLocalPath, waitForBoard } from './helpers';
 
 // Helper to open the create task dialog
 async function openCreateDialog(page: Page) {
-  const backlogHeading = page.getByRole('heading', { name: 'Backlog', exact: true });
+  const backlogHeading = page.getByRole('heading', { name: 'Draft', exact: true });
   const headerRow = backlogHeading.locator('..').locator('..');
   const addButton = headerRow.locator('button').first();
   await addButton.click();
@@ -34,8 +34,8 @@ test.describe('Kanban Board', () => {
     await waitForBoard(page);
   });
 
-  test('renders all four columns', async ({ page }) => {
-    for (const col of ['Backlog', 'In Progress', 'Review', 'Done']) {
+  test('renders all six lifecycle columns', async ({ page }) => {
+    for (const col of ['Draft', 'Inbox', 'Research', 'Implement', 'Review', 'Knowledge']) {
       await expect(page.getByRole('heading', { name: col, exact: true })).toBeVisible();
     }
   });
@@ -159,14 +159,16 @@ test.describe('Task CRUD', () => {
     await expect(page.getByRole('button', { name: 'Summary', exact: true })).toHaveCount(0);
   });
 
-  test('dragging task to In Progress starts the agent', async ({ page }) => {
+  test('dragging a Draft card into Inbox sends an explicit Board command', async ({ page }) => {
     const taskTitle = `Drag Start Task ${Date.now()}`;
     const taskId = await createTask(page, taskTitle);
     createdTaskIds.push(taskId);
 
+    let stageRequests = 0;
     let runRequests = 0;
-    await page.route(`**/api/tasks/${taskId}/run`, async (route) => {
-      runRequests += 1;
+    await page.route(`**/api/tasks/${taskId}/board-stage`, async (route) => {
+      stageRequests += 1;
+      expect(route.request().postDataJSON()).toEqual({ targetStage: 'inbox', targetRoleId: 'orchestrator' });
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -175,18 +177,24 @@ test.describe('Task CRUD', () => {
           title: taskTitle,
           description: 'Test description',
           priority: 'medium',
-          columnId: 'in-progress',
+          columnId: 'backlog',
+          boardStage: 'inbox',
+          lifecycleState: 'Active',
           agentStatus: 'planning',
           agentType: 'copilot',
           createdAt: Date.now(),
         }),
       });
     });
+    await page.route(`**/api/tasks/${taskId}/run`, async (route) => {
+      runRequests += 1;
+      await route.continue();
+    });
 
-    const taskCard = page.locator('[data-column="backlog"] .group').filter({
+    const taskCard = page.locator('[data-column="draft"] .group').filter({
       has: page.getByRole('heading', { name: taskTitle }),
     });
-    const targetColumn = page.locator('[data-column="in-progress"]');
+    const targetColumn = page.locator('[data-column="inbox"]');
     await taskCard.scrollIntoViewIfNeeded();
 
     const sourceBox = await taskCard.boundingBox();
@@ -199,7 +207,9 @@ test.describe('Task CRUD', () => {
     await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 20 });
     await page.mouse.up();
 
-    await expect.poll(() => runRequests).toBe(1);
+    await page.getByRole('dialog').getByRole('button', { name: 'Validate move' }).click();
+    await expect.poll(() => stageRequests).toBe(1);
+    expect(runRequests).toBe(0);
   });
 });
 
@@ -378,7 +388,7 @@ test.describe('Task Sorting', () => {
     await sortSelect.selectOption('priority');
 
     // Get task titles in backlog column order
-    const backlog = page.locator('[data-column="backlog"]').first();
+    const backlog = page.locator('[data-column="draft"]').first();
     const headings = backlog.locator('h3');
     const titles = await headings.allTextContents();
 

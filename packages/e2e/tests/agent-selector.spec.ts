@@ -25,7 +25,7 @@ async function getPreferredAgent(request: any): Promise<{ name: string; label: s
 }
 
 async function openCreateDialog(page: Page) {
-  const backlogHeading = page.getByRole('heading', { name: 'Backlog', exact: true });
+  const backlogHeading = page.getByRole('heading', { name: 'Draft', exact: true });
   const headerRow = backlogHeading.locator('..').locator('..');
   const addButton = headerRow.locator('button').first();
   await addButton.click();

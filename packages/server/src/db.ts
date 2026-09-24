@@ -148,6 +148,35 @@ export function migrateSqliteDatabase(db: Database.Database): void {
   if (!colNames.has('run_requested_at')) db.exec(`ALTER TABLE tasks ADD COLUMN run_requested_at INTEGER`);
   if (!colNames.has('run_claimed_at')) db.exec(`ALTER TABLE tasks ADD COLUMN run_claimed_at INTEGER`);
   if (!colNames.has('timeout_minutes')) db.exec(`ALTER TABLE tasks ADD COLUMN timeout_minutes INTEGER`);
+  if (!colNames.has('board_stage')) db.exec(`ALTER TABLE tasks ADD COLUMN board_stage TEXT`);
+  if (!colNames.has('lifecycle_state')) db.exec(`ALTER TABLE tasks ADD COLUMN lifecycle_state TEXT`);
+  if (!colNames.has('latest_handoff_id')) db.exec(`ALTER TABLE tasks ADD COLUMN latest_handoff_id TEXT`);
+  db.exec(`
+    UPDATE tasks SET
+      board_stage = CASE column_id WHEN 'backlog' THEN 'draft' WHEN 'in-progress' THEN 'implement' WHEN 'review' THEN 'review' WHEN 'done' THEN 'knowledge' END,
+      lifecycle_state = CASE column_id WHEN 'backlog' THEN 'Draft' WHEN 'in-progress' THEN 'Active' WHEN 'review' THEN 'Active' WHEN 'done' THEN 'Done' END
+    WHERE board_stage IS NULL AND lifecycle_state IS NULL
+      AND column_id IN ('backlog', 'in-progress', 'review', 'done')
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_handoffs (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      card_id TEXT NOT NULL,
+      source_role_id TEXT NOT NULL,
+      target_role_id TEXT NOT NULL,
+      session_id TEXT,
+      session_reference_reason TEXT,
+      created_at INTEGER NOT NULL,
+      previous_handoff_id TEXT,
+      target_stage TEXT NOT NULL,
+      actor_id TEXT NOT NULL
+    )
+  `);
+  const handoffCols = new Set((db.pragma('table_info(task_handoffs)') as { name: string }[]).map((column) => column.name));
+  if (!handoffCols.has('target_stage')) db.exec(`ALTER TABLE task_handoffs ADD COLUMN target_stage TEXT`);
+  if (!handoffCols.has('actor_id')) db.exec(`ALTER TABLE task_handoffs ADD COLUMN actor_id TEXT NOT NULL DEFAULT 'human'`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_task_handoffs_task_created ON task_handoffs(task_id, created_at)`);
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_external_identity ON tasks(external_source, external_key) WHERE external_source IS NOT NULL AND external_key IS NOT NULL`);
 
   // Task groups table
@@ -371,6 +400,9 @@ function ensureSqliteProjectForeignKeys(db: Database.Database): void {
         run_requested_at INTEGER,
         run_claimed_at INTEGER,
         timeout_minutes INTEGER,
+        board_stage TEXT,
+        lifecycle_state TEXT,
+        latest_handoff_id TEXT,
         FOREIGN KEY (project_id) REFERENCES projects(id),
         FOREIGN KEY (group_id) REFERENCES task_groups(id) ON DELETE CASCADE
       );
@@ -379,13 +411,15 @@ function ensureSqliteProjectForeignKeys(db: Database.Database): void {
         id, title, description, priority, column_id, agent_status, created_at,
         started_at, completed_at, repo_path, branch_name, base_branch, use_worktree,
         worktree_path, agent_type, archived, project_id, group_id, group_order, summary,
-        external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes
+        external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes,
+        board_stage, lifecycle_state, latest_handoff_id
       )
       SELECT
         id, title, description, priority, column_id, agent_status, created_at,
         started_at, completed_at, repo_path, branch_name, base_branch, use_worktree,
         worktree_path, agent_type, archived, project_id, group_id, group_order, summary,
-        external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes
+        external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes,
+        board_stage, lifecycle_state, latest_handoff_id
       FROM tasks;
 
       DROP TABLE tasks;
@@ -509,6 +543,36 @@ export async function initPostgresDatabase(pool: Pool): Promise<void> {
   await addCol('run_requested_at', 'BIGINT');
   await addCol('run_claimed_at', 'BIGINT');
   await addCol('timeout_minutes', 'INTEGER');
+  await addCol('board_stage', 'TEXT');
+  await addCol('lifecycle_state', 'TEXT');
+  await addCol('latest_handoff_id', 'TEXT');
+  await pool.query(`
+    UPDATE tasks SET
+      board_stage = CASE column_id WHEN 'backlog' THEN 'draft' WHEN 'in-progress' THEN 'implement' WHEN 'review' THEN 'review' WHEN 'done' THEN 'knowledge' END,
+      lifecycle_state = CASE column_id WHEN 'backlog' THEN 'Draft' WHEN 'in-progress' THEN 'Active' WHEN 'review' THEN 'Active' WHEN 'done' THEN 'Done' END
+    WHERE board_stage IS NULL AND lifecycle_state IS NULL
+      AND column_id IN ('backlog', 'in-progress', 'review', 'done')
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS task_handoffs (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      card_id TEXT NOT NULL,
+      source_role_id TEXT NOT NULL,
+      target_role_id TEXT NOT NULL,
+      session_id TEXT,
+      session_reference_reason TEXT,
+      created_at BIGINT NOT NULL,
+      previous_handoff_id TEXT,
+      target_stage TEXT NOT NULL,
+      actor_id TEXT NOT NULL
+    )
+  `);
+  const { rows: handoffColumnRows } = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name='task_handoffs'`);
+  const handoffColumnNames = new Set(handoffColumnRows.map((row: { column_name: string }) => row.column_name));
+  if (!handoffColumnNames.has('target_stage')) await pool.query(`ALTER TABLE task_handoffs ADD COLUMN target_stage TEXT`);
+  if (!handoffColumnNames.has('actor_id')) await pool.query(`ALTER TABLE task_handoffs ADD COLUMN actor_id TEXT NOT NULL DEFAULT 'human'`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_task_handoffs_task_created ON task_handoffs(task_id, created_at)`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_external_identity ON tasks(external_source, external_key) WHERE external_source IS NOT NULL AND external_key IS NOT NULL`);
 
   // Task groups table

@@ -1,7 +1,7 @@
 import { Pool } from 'pg';
-import type { Task, Priority, ColumnId, AgentStatus, AgentType, AgentEvent, TaskRelationship, ExecutionAttempt } from '../types.js';
+import type { Task, Priority, ColumnId, BoardStageId, AgentStatus, AgentType, AgentEvent, TaskRelationship, ExecutionAttempt, Handoff, BoardTransitionRecord } from '../types.js';
 import type { TaskRepository, ContinuationEligibility } from './types.js';
-import { isValidPriority, isValidColumnId, isValidAgentStatus, isValidAgentType } from '@ai-agent-board/shared/constants.js';
+import { appendHandoff, createTaskHandoffAssociation, isValidPriority, isValidColumnId, isValidAgentStatus, isValidAgentType } from '@ai-agent-board/shared/constants.js';
 import { errorMessage } from '../utils.js';
 
 interface TaskRow {
@@ -28,6 +28,23 @@ interface TaskRow {
   external_source: string | null; external_key: string | null; provenance: string | null;
   run_requested_at: string | null; run_claimed_at: string | null;
   timeout_minutes: number | null;
+  board_stage: Task['boardStage'] | null;
+  lifecycle_state: Task['lifecycleState'] | null;
+  latest_handoff_id: string | null;
+}
+
+interface HandoffRow {
+  id: string; task_id: string; card_id: string; source_role_id: string; target_role_id: string;
+  session_id: string | null; session_reference_reason: Handoff['sessionReferenceReason']; created_at: string;
+  previous_handoff_id: string | null;
+  target_stage: BoardStageId;
+  actor_id: string;
+}
+
+function rowToHandoff(row: HandoffRow): Handoff {
+  return Object.freeze({ id: row.id, taskId: row.task_id, cardId: row.card_id, sourceRoleId: row.source_role_id,
+    targetRoleId: row.target_role_id, sessionId: row.session_id, sessionReferenceReason: row.session_reference_reason,
+    createdAt: Number(row.created_at), previousHandoffId: row.previous_handoff_id });
 }
 
 function rowToTask(row: TaskRow): Task {
@@ -37,7 +54,8 @@ function rowToTask(row: TaskRow): Task {
     row.priority = 'medium';
   }
 
-  if (!isValidColumnId(row.column_id)) {
+  const legacyColumnId = isValidColumnId(row.column_id) ? undefined : row.column_id;
+  if (legacyColumnId) {
     console.warn(`[postgres] Invalid column_id in database: ${row.column_id} for task ${row.id}, using 'backlog' as default`);
     row.column_id = 'backlog';
   }
@@ -59,6 +77,10 @@ function rowToTask(row: TaskRow): Task {
     description: row.description,
     priority: row.priority as Priority,
     columnId: row.column_id as ColumnId,
+    legacyColumnId,
+    boardStage: row.board_stage,
+    lifecycleState: row.lifecycle_state,
+    handoff: row.latest_handoff_id ? { taskId: row.id, cardId: row.id, latestHandoffId: row.latest_handoff_id } : undefined,
     agentStatus: row.agent_status as AgentStatus,
     createdAt: Number(row.created_at),
     startedAt: row.started_at != null ? Number(row.started_at) : undefined,
@@ -132,10 +154,10 @@ export class PostgresTaskRepository implements TaskRepository {
 
   async create(task: Task): Promise<Task> {
     await this.pool.query(
-      `INSERT INTO tasks (id, project_id, title, description, priority, column_id, agent_status, agent_type,
+      `INSERT INTO tasks (id, project_id, title, description, priority, column_id, board_stage, lifecycle_state, agent_status, agent_type,
         created_at, started_at, completed_at, repo_path, branch_name, base_branch, use_worktree, worktree_path, archived,
-        group_id, group_order, summary, external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)`,
+        group_id, group_order, summary, external_source, external_key, provenance, run_requested_at, run_claimed_at, timeout_minutes, latest_handoff_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)`,
       [
         task.id,
         task.projectId,
@@ -143,6 +165,8 @@ export class PostgresTaskRepository implements TaskRepository {
         task.description,
         task.priority,
         task.columnId,
+        task.boardStage ?? null,
+        task.lifecycleState ?? null,
         task.agentStatus,
         task.agentType ?? 'copilot',
         task.createdAt,
@@ -156,7 +180,7 @@ export class PostgresTaskRepository implements TaskRepository {
         task.archived ?? false,
         task.groupId ?? null,
         task.groupOrder ?? null,
-        task.summary ?? null, task.externalSource ?? null, task.externalKey ?? null, task.provenance ? JSON.stringify(task.provenance) : null, task.runRequestedAt ?? null, task.runClaimedAt ?? null, task.timeoutMinutes ?? null,
+        task.summary ?? null, task.externalSource ?? null, task.externalKey ?? null, task.provenance ? JSON.stringify(task.provenance) : null, task.runRequestedAt ?? null, task.runClaimedAt ?? null, task.timeoutMinutes ?? null, task.handoff?.latestHandoffId ?? null,
       ]
     );
     return task;
@@ -188,17 +212,19 @@ export class PostgresTaskRepository implements TaskRepository {
       const merged = { ...existing, ...updates };
       await client.query(
         `UPDATE tasks SET
-          title = $1, description = $2, priority = $3, column_id = $4,
-          agent_status = $5, agent_type = $6, started_at = $7, completed_at = $8,
-          repo_path = $9, branch_name = $10, base_branch = $11, use_worktree = $12,
-          worktree_path = $13, archived = $14, summary = $15, run_requested_at=$16, run_claimed_at=$17,
-          timeout_minutes=$18
-        WHERE id = $19`,
+          title = $1, description = $2, priority = $3, column_id = $4, board_stage = $5, lifecycle_state = $6,
+          agent_status = $7, agent_type = $8, started_at = $9, completed_at = $10,
+          repo_path = $11, branch_name = $12, base_branch = $13, use_worktree = $14,
+          worktree_path = $15, archived = $16, summary = $17, run_requested_at=$18, run_claimed_at=$19,
+          timeout_minutes=$20, latest_handoff_id=$21
+        WHERE id = $22`,
         [
           merged.title,
           merged.description,
           merged.priority,
           merged.columnId,
+          merged.boardStage ?? null,
+          merged.lifecycleState ?? null,
           merged.agentStatus,
           merged.agentType,
           merged.startedAt ?? null,
@@ -209,7 +235,7 @@ export class PostgresTaskRepository implements TaskRepository {
           merged.useWorktree ?? null,
           merged.worktreePath ?? null,
           merged.archived ?? false,
-          merged.summary ?? null, merged.runRequestedAt ?? null, merged.runClaimedAt ?? null, merged.timeoutMinutes ?? null,
+          merged.summary ?? null, merged.runRequestedAt ?? null, merged.runClaimedAt ?? null, merged.timeoutMinutes ?? null, merged.handoff?.latestHandoffId ?? null,
           id,
         ]
       );
@@ -295,6 +321,48 @@ export class PostgresTaskRepository implements TaskRepository {
     return rows.map(rowToTask);
   }
 
+  async getHandoffs(taskId: string): Promise<BoardTransitionRecord[]> {
+    const { rows } = await this.pool.query<HandoffRow>(
+      'SELECT * FROM task_handoffs WHERE task_id=$1 ORDER BY created_at, id', [taskId],
+    );
+    return rows.map((row) => ({ handoff: rowToHandoff(row), targetStage: row.target_stage, actorId: row.actor_id }));
+  }
+
+  async transitionBoardCard(taskId: string, expectedStage: BoardStageId, updates: Partial<Task>, handoff: Handoff, targetStage: BoardStageId, actorId: string): Promise<Task | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query<TaskRow>('SELECT * FROM tasks WHERE id=$1 FOR UPDATE', [taskId]);
+      if (!rows[0]) { await client.query('ROLLBACK'); return undefined; }
+      const existing = rowToTask(rows[0]);
+      if (existing.boardStage !== expectedStage) { await client.query('ROLLBACK'); return undefined; }
+      const owner = { taskId: existing.id, cardId: existing.id };
+      const association = existing.handoff
+        ? { ok: true as const, value: existing.handoff }
+        : createTaskHandoffAssociation(owner);
+      if (!association.ok) { await client.query('ROLLBACK'); return undefined; }
+      const known = await client.query<{ id: string }>('SELECT id FROM task_handoffs WHERE task_id=$1', [taskId]);
+      const appended = appendHandoff(association.value, owner, handoff, association.value.latestHandoffId, known.rows.map(row => row.id));
+      if (!appended.ok) { await client.query('ROLLBACK'); return undefined; }
+      await client.query(`INSERT INTO task_handoffs
+        (id, task_id, card_id, source_role_id, target_role_id, session_id, session_reference_reason, created_at, previous_handoff_id, target_stage, actor_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [handoff.id, handoff.taskId, handoff.cardId, handoff.sourceRoleId,
+        handoff.targetRoleId, handoff.sessionId, handoff.sessionReferenceReason, handoff.createdAt, handoff.previousHandoffId, targetStage, actorId]);
+      const merged = { ...existing, ...updates, handoff: appended.value };
+      const updated = await client.query<TaskRow>(`UPDATE tasks SET board_stage=$1, lifecycle_state=$2, latest_handoff_id=$3,
+        agent_status=$4, started_at=$5, completed_at=$6 WHERE id=$7 RETURNING *`, [merged.boardStage ?? null,
+        merged.lifecycleState ?? null, merged.handoff.latestHandoffId, merged.agentStatus, merged.startedAt ?? null,
+        merged.completedAt ?? null, taskId]);
+      await client.query('COMMIT');
+      return updated.rows[0] ? rowToTask(updated.rows[0]) : undefined;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async getRelationships(taskId: string): Promise<TaskRelationship[]> {
     const { rows } = await this.pool.query<{ task_id: string; related_task_id: string; type: 'related'; created_at: string }>(
       'SELECT task_id, related_task_id, type, created_at FROM task_relationships WHERE task_id=$1 OR related_task_id=$1 ORDER BY created_at, task_id, related_task_id', [taskId]);
@@ -367,17 +435,17 @@ export class PostgresTaskRepository implements TaskRepository {
         await client.query('COMMIT');
         return { task: rowToTask(replayTaskResult.rows[0]), attempt: replay, created: false };
       }
-      const taskInsert = await client.query<TaskRow>(`INSERT INTO tasks (id,project_id,title,description,priority,column_id,agent_status,agent_type,
+      const taskInsert = await client.query<TaskRow>(`INSERT INTO tasks (id,project_id,title,description,priority,column_id,board_stage,lifecycle_state,agent_status,agent_type,
         created_at,started_at,completed_at,repo_path,branch_name,base_branch,use_worktree,worktree_path,archived,group_id,group_order,summary,
-        external_source,external_key,provenance,run_requested_at,run_claimed_at,timeout_minutes)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+        external_source,external_key,provenance,run_requested_at,run_claimed_at,timeout_minutes,latest_handoff_id)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
         ON CONFLICT(external_source,external_key)
           WHERE external_source IS NOT NULL AND external_key IS NOT NULL
         DO NOTHING RETURNING *`, [task.id,task.projectId,task.title,task.description,task.priority,task.columnId,
-        task.agentStatus,task.agentType ?? 'copilot',task.createdAt,task.startedAt ?? null,task.completedAt ?? null,task.repoPath ?? null,
+        task.boardStage ?? null,task.lifecycleState ?? null,task.agentStatus,task.agentType ?? 'copilot',task.createdAt,task.startedAt ?? null,task.completedAt ?? null,task.repoPath ?? null,
         task.branchName ?? null,task.baseBranch ?? null,task.useWorktree ?? null,task.worktreePath ?? null,task.archived ?? false,task.groupId ?? null,
         task.groupOrder ?? null,task.summary ?? null,task.externalSource ?? null,task.externalKey ?? null,task.provenance ? JSON.stringify(task.provenance) : null,
-        task.runRequestedAt ?? null,task.runClaimedAt ?? null,task.timeoutMinutes ?? null]);
+        task.runRequestedAt ?? null,task.runClaimedAt ?? null,task.timeoutMinutes ?? null,task.handoff?.latestHandoffId ?? null]);
       let persistedTask = taskInsert.rows[0] ? rowToTask(taskInsert.rows[0]) : undefined;
       if (!persistedTask) {
         const existingTask = await client.query<TaskRow>('SELECT * FROM tasks WHERE external_source=$1 AND external_key=$2 FOR UPDATE', [task.externalSource,task.externalKey]);
